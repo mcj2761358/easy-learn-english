@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode
+*.xcuserstate
+*.xcworkspace
+*.xcuserdata/
+DerivedData/
+*.xccheckout
+*.xcscmblueprint
+*.xcuserdatad
+*.xcuserstate
+*.xcresult
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Logs
+*.log
+
+# App data
+EasyLearnEnglish/Info.plist
+
+# Generated project
+EasyLearnEnglish.xcodeproj/
+
+# Misc
+*.swp
+*.swo
+
