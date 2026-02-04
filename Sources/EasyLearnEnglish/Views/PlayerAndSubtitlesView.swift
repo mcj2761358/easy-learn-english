@@ -30,7 +30,8 @@ struct PlayerAndSubtitlesView: View {
             }
             .background(Color.black.opacity(0.05))
 
-            if let error = appModel.transcriptionError {
+            if let error = appModel.transcriptionError,
+               (appModel.transcript?.segments.isEmpty ?? true) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(error.title)
                         .font(.headline)
@@ -46,6 +47,9 @@ struct PlayerAndSubtitlesView: View {
                                 }
                             }
                         }
+                    }
+                    Button("诊断") {
+                        appModel.runDiagnostics()
                     }
                 }
                 .padding(8)
@@ -69,6 +73,25 @@ struct PlayerAndSubtitlesView: View {
             Divider()
             SubtitleListView(appModel: appModel)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .sheet(isPresented: $appModel.showDiagnostics) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("转写诊断")
+                    .font(.headline)
+                ScrollView {
+                    Text(appModel.diagnosticsText ?? "暂无诊断信息")
+                        .font(.system(.body, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                HStack {
+                    Spacer()
+                    Button("关闭") {
+                        appModel.showDiagnostics = false
+                    }
+                }
+            }
+            .padding(16)
+            .frame(width: 520, height: 320)
         }
     }
 }

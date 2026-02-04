@@ -8,6 +8,7 @@ struct MediaLibraryView: View {
     @State private var selectionID: UUID?
 
     private let transcriptStore = TranscriptStore()
+    private let supportedContentTypes: [UTType] = MediaLibrary.supportedExtensions.compactMap { UTType(filenameExtension: $0) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -34,10 +35,17 @@ struct MediaLibraryView: View {
                 }
                 .padding(.horizontal, 8)
             } else if !appModel.mediaLibrary.lastImportMessage.isEmpty {
-                Text(appModel.mediaLibrary.lastImportMessage)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(appModel.mediaLibrary.lastImportMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    if !appModel.mediaLibrary.lastImportDetail.isEmpty {
+                        Text(appModel.mediaLibrary.lastImportDetail)
+                            .font(.caption2)
+                            .foregroundColor(.red)
+                    }
+                }
+                .padding(.horizontal, 8)
             }
 
             List(selection: $selectionID) {
@@ -93,7 +101,7 @@ struct MediaLibraryView: View {
         }
         .fileImporter(
             isPresented: $showImporter,
-            allowedContentTypes: [UTType.audio, UTType.movie],
+            allowedContentTypes: supportedContentTypes.isEmpty ? [UTType.audio, UTType.movie] : supportedContentTypes,
             allowsMultipleSelection: true
         ) { result in
             switch result {

@@ -12,9 +12,17 @@ final class AppViewModel: ObservableObject {
     @Published var selectedMedia: MediaItem? {
         didSet { handleSelectionChange() }
     }
-    @Published var transcript: Transcript?
+    @Published var transcript: Transcript? {
+        didSet {
+            if let transcript, !transcript.segments.isEmpty {
+                transcriptionError = nil
+            }
+        }
+    }
     @Published var isTranscribing: Bool = false
     @Published var transcriptionError: TranscriptionErrorInfo?
+    @Published var diagnosticsText: String?
+    @Published var showDiagnostics: Bool = false
     @Published var currentSegmentIndex: Int = 0
     @Published var selectedTokens: [String] = []
     @Published var translation: TranslationResult?
@@ -125,6 +133,14 @@ final class AppViewModel: ObservableObject {
         isTranscribing = false
 
         guard let media = selectedMedia else { return }
+        if !FileManager.default.fileExists(atPath: media.url.path) {
+            transcriptionError = TranscriptionErrorInfo(
+                title: "媒体文件不可访问",
+                message: "导入的媒体文件无法读取，请重新导入该文件。",
+                actions: []
+            )
+            return
+        }
         preparePlayer(with: media.url)
 
         if let cached = transcriptStore.load(fingerprint: media.fingerprint) {
@@ -170,6 +186,7 @@ final class AppViewModel: ObservableObject {
     private func transcribe(media: MediaItem) async {
         isTranscribing = true
         transcriptionError = nil
+        diagnosticsText = nil
         let provider = transcriptionService.provider(for: settings.provider, settings: settings)
         do {
             let segments = try await provider.transcribe(mediaURL: media.url, language: "en-US")
@@ -179,6 +196,7 @@ final class AppViewModel: ObservableObject {
             let transcript = Transcript(mediaFingerprint: media.fingerprint, provider: provider.name, language: "en-US", segments: segments)
             transcriptStore.save(transcript)
             self.transcript = transcript
+            self.transcriptionError = nil
             isTranscribing = false
         } catch {
             transcriptionError = TranscriptionErrorMapper.describe(error)
@@ -191,8 +209,20 @@ final class AppViewModel: ObservableObject {
         transcriptStore.delete(fingerprint: media.fingerprint)
         transcript = nil
         transcriptionError = nil
+        diagnosticsText = nil
         Task {
             await transcribe(media: media)
+        }
+    }
+
+    func runDiagnostics() {
+        guard let media = selectedMedia else { return }
+        Task {
+            let text = await TranscriptionDiagnostics.run(mediaURL: media.url)
+            await MainActor.run {
+                diagnosticsText = text
+                showDiagnostics = true
+            }
         }
     }
 }

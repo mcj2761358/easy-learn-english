@@ -6,13 +6,19 @@ final class MediaLibrary: ObservableObject {
     @Published private(set) var items: [MediaItem] = []
     @Published private(set) var isImporting: Bool = false
     @Published private(set) var lastImportMessage: String = ""
+    @Published private(set) var lastImportDetail: String = ""
     @Published private(set) var lastImportAt: Date?
 
     struct ImportResult {
         let imported: [MediaItem]
         let skipped: Int
         let failed: Int
+        let failures: [String]
     }
+
+    static let supportedAudioExtensions: Set<String> = ["m4a", "mp3", "wav", "aiff", "caf"]
+    static let supportedVideoExtensions: Set<String> = ["mp4", "mov", "m4v"]
+    static let supportedExtensions: Set<String> = supportedAudioExtensions.union(supportedVideoExtensions)
 
     init() {
         load()
@@ -20,7 +26,7 @@ final class MediaLibrary: ObservableObject {
 
     func importMedia(urls: [URL]) async -> ImportResult {
         guard !urls.isEmpty else {
-            return ImportResult(imported: [], skipped: 0, failed: 0)
+            return ImportResult(imported: [], skipped: 0, failed: 0, failures: [])
         }
 
         isImporting = true
@@ -34,7 +40,7 @@ final class MediaLibrary: ObservableObject {
         if result.failed > 0 {
             message += "，失败 \(result.failed) 个"
         }
-        showImportMessage(message)
+        showImportMessage(message, detail: result.failures.first ?? "")
         return result
     }
 
@@ -69,6 +75,7 @@ final class MediaLibrary: ObservableObject {
         var imported: [MediaItem] = []
         var skipped = 0
         var failed = 0
+        var failures: [String] = []
         for url in urls {
             guard url.isFileURL else {
                 skipped += 1
@@ -80,8 +87,19 @@ final class MediaLibrary: ObservableObject {
                 continue
             }
 
+            if let reason = await validateMedia(url: url) {
+                failed += 1
+                let title = url.deletingPathExtension().lastPathComponent
+                failures.append("\(title)：\(reason)")
+                continue
+            }
+
             let title = url.deletingPathExtension().lastPathComponent
-            let localURL = copyToAppSupportIfNeeded(url: url, fingerprint: fingerprint)
+            guard let localURL = copyToAppSupportIfNeeded(url: url, fingerprint: fingerprint) else {
+                failed += 1
+                failures.append("\(title)：复制文件失败")
+                continue
+            }
             let duration = await mediaDuration(url: localURL)
             let item = MediaItem(url: localURL, title: title, duration: duration, fingerprint: fingerprint)
             items.append(item)
@@ -92,7 +110,7 @@ final class MediaLibrary: ObservableObject {
         if changed {
             save()
         }
-        return ImportResult(imported: imported, skipped: skipped, failed: failed)
+        return ImportResult(imported: imported, skipped: skipped, failed: failed, failures: failures)
     }
 
     private func mediaDuration(url: URL) async -> Double {
@@ -108,7 +126,7 @@ final class MediaLibrary: ObservableObject {
         }
     }
 
-    private func copyToAppSupportIfNeeded(url: URL, fingerprint: String) -> URL {
+    private func copyToAppSupportIfNeeded(url: URL, fingerprint: String) -> URL? {
         let ext = url.pathExtension.isEmpty ? "dat" : url.pathExtension
         let dest = AppPaths.mediaFile(fingerprint: fingerprint, ext: ext)
         if FileManager.default.fileExists(atPath: dest.path) {
@@ -126,7 +144,7 @@ final class MediaLibrary: ObservableObject {
             try FileManager.default.copyItem(at: url, to: dest)
             return dest
         } catch {
-            return url
+            return nil
         }
     }
 
@@ -143,15 +161,53 @@ final class MediaLibrary: ObservableObject {
         }
     }
 
-    private func showImportMessage(_ message: String) {
+    private func showImportMessage(_ message: String, detail: String) {
         lastImportMessage = message
+        lastImportDetail = detail
         let timestamp = Date()
         lastImportAt = timestamp
         Task { [timestamp] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             if lastImportAt == timestamp {
                 lastImportMessage = ""
+                lastImportDetail = ""
             }
         }
+    }
+
+    private func validateMedia(url: URL) async -> String? {
+        let ext = url.pathExtension.lowercased()
+        if !Self.supportedExtensions.contains(ext) {
+            return "不支持的格式（.\(ext.isEmpty ? "未知" : ext)）"
+        }
+
+        let needsAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if needsAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        if Self.supportedAudioExtensions.contains(ext) {
+            do {
+                _ = try AVAudioFile(forReading: url)
+                return nil
+            } catch {
+                return "音频不可读取：\(error.localizedDescription)"
+            }
+        }
+
+        let asset = AVAsset(url: url)
+        let isPlayable = (try? await asset.load(.isPlayable)) ?? false
+        let isExportable = (try? await asset.load(.isExportable)) ?? false
+        let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+
+        if !isPlayable && !isExportable {
+            return "系统不支持该视频格式"
+        }
+        if audioTracks.isEmpty {
+            return "视频没有音轨"
+        }
+        return nil
     }
 }

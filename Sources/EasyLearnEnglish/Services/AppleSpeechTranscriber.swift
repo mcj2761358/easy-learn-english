@@ -39,6 +39,9 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
 
         let audioURL = try await ensureAudioURL(for: mediaURL)
         let audioDuration = (try? await AVAsset(url: audioURL).load(.duration).seconds) ?? 0
+        if let issue = validateAudioReadable(audioURL) {
+            throw TranscriptionError.failed("音频文件不可读取：\(issue)")
+        }
         let recognizer = SFSpeechRecognizer(locale: Locale(identifier: language))
         guard let recognizer else {
             throw TranscriptionError.speechNotAvailable
@@ -102,7 +105,7 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
             let task = recognizer.recognitionTask(with: request) { result, error in
                 if let error = error {
                     timeoutTask.cancel()
-                    let transcriptionError = Self.mapError(error)
+                    let transcriptionError = Self.mapError(error, audioURL: audioURL)
                     Task {
                         await tracker.resumeWithError(continuation, error: transcriptionError)
                     }
@@ -144,6 +147,10 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
     }
 
     private static func mapError(_ error: Error) -> TranscriptionError {
+        return mapError(error, audioURL: nil)
+    }
+
+    private static func mapError(_ error: Error, audioURL: URL?) -> TranscriptionError {
         if let nsError = error as NSError? {
             // kLSRErrorDomain: Apple 私有语音识别错误域（无官方文档）
             if nsError.domain == "kLSRErrorDomain" {
@@ -158,12 +165,37 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
             if nsError.domain == "kAFAssistantErrorDomain", nsError.code == 1101 {
                 return .failed("语音识别服务连接失败，请检查网络连接。")
             }
+            if nsError.localizedDescription.lowercased().contains("cannot open") {
+                let fileInfo = audioURL?.path ?? "未知路径"
+                let detail = "(domain: \(nsError.domain), code: \(nsError.code))"
+                return .failed("语音识别无法打开音频文件：\(fileInfo) \(detail)。请尝试重新导入或转换为 mp3/m4a 后重试。")
+            }
         }
         let message = error.localizedDescription.lowercased()
         if message.contains("no speech detected") {
             return .noSpeechDetected
         }
         return .failed(error.localizedDescription)
+    }
+
+    private func validateAudioReadable(_ url: URL) -> String? {
+        if !FileManager.default.fileExists(atPath: url.path) {
+            return "文件不存在（\(url.path)）"
+        }
+        if !FileManager.default.isReadableFile(atPath: url.path) {
+            return "文件不可读（\(url.path)）"
+        }
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? NSNumber,
+           size.int64Value == 0 {
+            return "文件大小为 0"
+        }
+        do {
+            _ = try AVAudioFile(forReading: url)
+        } catch {
+            return "AVAudioFile 无法读取：\(error.localizedDescription)"
+        }
+        return nil
     }
 }
 
@@ -215,6 +247,15 @@ enum AudioExtractor {
     static func extractAudio(from mediaURL: URL) async throws -> URL {
         let asset = AVAsset(url: mediaURL)
         let duration = try await asset.load(.duration)
+        let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+        if audioTracks.isEmpty {
+            throw TranscriptionError.failed("视频没有音轨，无法提取音频。")
+        }
+
+        let presets = AVAssetExportSession.exportPresets(compatibleWith: asset)
+        guard presets.contains(AVAssetExportPresetAppleM4A) else {
+            throw TranscriptionError.failed("该视频格式不支持导出音频，请先转换格式后再导入。")
+        }
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("m4a")
@@ -226,10 +267,18 @@ enum AudioExtractor {
         session.outputFileType = .m4a
         session.timeRange = CMTimeRange(start: .zero, duration: duration)
 
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try? FileManager.default.removeItem(at: outputURL)
+        }
+
         await session.export()
         if session.status == .completed {
             return outputURL
         }
-        throw TranscriptionError.failed(session.error?.localizedDescription ?? "音频导出失败")
+        if let nsError = session.error as NSError? {
+            let detail = "\(nsError.localizedDescription) (domain: \(nsError.domain), code: \(nsError.code))"
+            throw TranscriptionError.failed("音频导出失败：\(detail)")
+        }
+        throw TranscriptionError.failed("音频导出失败")
     }
 }
