@@ -20,6 +20,12 @@ enum AppPaths {
         return dir
     }
 
+    static var cookiesDir: URL {
+        let dir = appSupport.appendingPathComponent("cookies", isDirectory: true)
+        ensureDirectory(dir)
+        return dir
+    }
+
     static var libraryFile: URL {
         appSupport.appendingPathComponent("library.json")
     }
@@ -30,6 +36,10 @@ enum AppPaths {
 
     static var translationCacheFile: URL {
         appSupport.appendingPathComponent("translation-cache.json")
+    }
+
+    static var ytDlpCookiesFile: URL {
+        cookiesDir.appendingPathComponent("yt-dlp-cookies.txt")
     }
 
     static func transcriptFile(fingerprint: String) -> URL {

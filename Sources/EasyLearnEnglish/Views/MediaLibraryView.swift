@@ -43,6 +43,13 @@ struct MediaLibraryView: View {
                     .tag(SidebarSelection.vocabulary)
 
                     HStack {
+                        Image(systemName: "globe")
+                            .foregroundColor(.secondary)
+                        Text("在线资源")
+                    }
+                    .tag(SidebarSelection.onlineResources)
+
+                    HStack {
                         Image(systemName: "gearshape")
                             .foregroundColor(.secondary)
                         Text("设置")
@@ -115,6 +122,9 @@ struct MediaLibraryView: View {
                     appModel.selectedMedia = appModel.mediaLibrary.items.first { $0.id == id }
                     appModel.clearSelection()
                 case .vocabulary:
+                    appModel.selectedMedia = nil
+                    appModel.clearSelection()
+                case .onlineResources:
                     appModel.selectedMedia = nil
                     appModel.clearSelection()
                 case .settings:

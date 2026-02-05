@@ -7,6 +7,7 @@ final class StorageUsageModel: ObservableObject {
     @Published var transcriptBytes: Int64 = 0
     @Published var vocabularyBytes: Int64 = 0
     @Published var translationCacheBytes: Int64 = 0
+    @Published var cookiesBytes: Int64 = 0
     @Published var lastUpdated: Date?
 
     func refresh() {
@@ -15,11 +16,13 @@ final class StorageUsageModel: ObservableObject {
             let transcripts = FileSize.folderSize(AppPaths.transcriptsDir)
             let vocabulary = FileSize.fileSize(AppPaths.vocabularyFile)
             let translationCache = FileSize.fileSize(AppPaths.translationCacheFile)
+            let cookies = FileSize.fileSize(AppPaths.ytDlpCookiesFile)
             await MainActor.run {
                 self.mediaBytes = media
                 self.transcriptBytes = transcripts
                 self.vocabularyBytes = vocabulary
                 self.translationCacheBytes = translationCache
+                self.cookiesBytes = cookies
                 self.lastUpdated = Date()
             }
         }
@@ -39,6 +42,17 @@ final class StorageUsageModel: ObservableObject {
 
     func openTranslationCacheFile() {
         NSWorkspace.shared.activateFileViewerSelecting([AppPaths.translationCacheFile])
+    }
+
+    func openCookiesFile() {
+        NSWorkspace.shared.activateFileViewerSelecting([AppPaths.ytDlpCookiesFile])
+    }
+
+    func clearCookiesFile() {
+        if FileManager.default.fileExists(atPath: AppPaths.ytDlpCookiesFile.path) {
+            try? FileManager.default.removeItem(at: AppPaths.ytDlpCookiesFile)
+        }
+        refresh()
     }
 }
 

@@ -5,6 +5,7 @@ enum SidebarSelection: Hashable {
     case media(UUID)
     case vocabulary
     case settings
+    case onlineResources
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
@@ -20,6 +21,8 @@ struct ContentView: View {
     @State private var selection: SidebarSelection?
     @State private var settingsSection: SettingsSection = .provider
     @State private var vocabularySelection: UUID?
+    @StateObject private var onlineResourcesStore = OnlineResourcesStore()
+    @StateObject private var onlineWebStore = WebViewStore()
 
     var body: some View {
         NavigationSplitView {
@@ -32,6 +35,9 @@ struct ContentView: View {
             } else if case .vocabulary = selection {
                 VocabularyLibraryView(appModel: appModel, selection: $vocabularySelection)
                     .frame(minWidth: 520)
+            } else if case .onlineResources = selection {
+                OnlineResourcesView(store: onlineResourcesStore, webStore: onlineWebStore)
+                    .frame(minWidth: 520)
             } else {
                 PlayerAndSubtitlesView(appModel: appModel)
                     .frame(minWidth: 520)
@@ -42,6 +48,9 @@ struct ContentView: View {
                     .frame(minWidth: 360)
             } else if case .vocabulary = selection {
                 VocabularyDetailView(appModel: appModel, entryID: vocabularySelection)
+                    .frame(minWidth: 360)
+            } else if case .onlineResources = selection {
+                OnlineResourcesDetailView(store: onlineResourcesStore)
                     .frame(minWidth: 360)
             } else {
                 TranslationAndVocabView(appModel: appModel)

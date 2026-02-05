@@ -38,6 +38,24 @@ struct StorageManagementView: View {
                 }
 
                 HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("内置浏览器 Cookies")
+                        Text(AppPaths.ytDlpCookiesFile.path)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Text(storage.cookiesBytes.byteCountString)
+                        .font(.caption)
+                    Button("打开") {
+                        storage.openCookiesFile()
+                    }
+                    Button("清除") {
+                        storage.clearCookiesFile()
+                    }
+                }
+
+                HStack {
                     if let last = storage.lastUpdated {
                         Text("更新于：\(last.formatted(date: .omitted, time: .shortened))")
                             .font(.caption2)

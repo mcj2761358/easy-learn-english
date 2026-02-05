@@ -130,69 +130,14 @@ struct ProviderSettingsView: View {
 }
 
 struct ToolsSettingsView: View {
-    @StateObject private var tools = ToolsStatusModel()
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SettingsCard(title: "外部工具") {
-                toolRow(title: "yt-dlp", result: tools.ytDlp)
-                toolRow(title: "ffmpeg", result: tools.ffmpeg)
-                HStack {
-                    if let last = tools.lastUpdated {
-                        Text("更新于：\(last.formatted(date: .omitted, time: .shortened))")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("更新于：--")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Button("刷新") {
-                        tools.refresh()
-                    }
-                }
+                Text("yt-dlp 和 ffmpeg 版本信息已移动到“在线资源”右侧。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
-        .onAppear {
-            tools.refresh()
-        }
-    }
-
-    @ViewBuilder
-    private func toolRow(title: String, result: ToolCheckResult?) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title)
-                    .frame(width: 72, alignment: .leading)
-                Spacer()
-                if let result {
-                    Text(result.found ? "已安装" : "未安装")
-                        .foregroundColor(result.found ? .secondary : .red)
-                } else {
-                    Text("检测中…")
-                        .foregroundColor(.secondary)
-                }
-            }
-            if let result, result.found {
-                if !result.version.isEmpty {
-                    Text(result.version)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                if let path = result.path {
-                    Text(path)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-            if let result, let error = result.error, !error.isEmpty {
-                Text("错误：\(error)")
-                    .font(.caption2)
-                    .foregroundColor(.red)
-            }
-        }
-        .padding(.vertical, 6)
     }
 }
 
@@ -229,6 +174,27 @@ struct StorageSettingsView: View {
                     size: storage.translationCacheBytes.byteCountString,
                     openAction: storage.openTranslationCacheFile
                 )
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("内置浏览器 Cookies")
+                            .font(.headline)
+                        Spacer()
+                        Text(storage.cookiesBytes.byteCountString)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Button("打开") {
+                            storage.openCookiesFile()
+                        }
+                        Button("清除") {
+                            storage.clearCookiesFile()
+                        }
+                    }
+                    Text(AppPaths.ytDlpCookiesFile.path)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 6)
 
                 HStack {
                     if let last = storage.lastUpdated {
