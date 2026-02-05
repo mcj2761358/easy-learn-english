@@ -27,8 +27,7 @@ struct TranscriptionDiagnostics {
         lines.append("音轨数量: \(audioTracks.count)")
         lines.append("视频轨数量: \(videoTracks.count)")
 
-        let presets = AVAssetExportSession.exportPresets(compatibleWith: asset)
-        let hasM4A = presets.contains(AVAssetExportPresetAppleM4A)
+        let hasM4A = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) != nil
         lines.append("支持导出 M4A: \(hasM4A ? "是" : "否")")
 
         return lines.joined(separator: "\n")

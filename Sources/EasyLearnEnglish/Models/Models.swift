@@ -20,9 +20,30 @@ struct MediaItem: Identifiable, Codable, Equatable, Hashable {
 
 struct Transcript: Codable {
     let mediaFingerprint: String
+    let mediaTitle: String?
+    let mediaDuration: Double?
+    let mediaSignature: String?
     let provider: String
     let language: String
     let segments: [TranscriptSegment]
+
+    init(
+        mediaFingerprint: String,
+        mediaTitle: String? = nil,
+        mediaDuration: Double? = nil,
+        mediaSignature: String? = nil,
+        provider: String,
+        language: String,
+        segments: [TranscriptSegment]
+    ) {
+        self.mediaFingerprint = mediaFingerprint
+        self.mediaTitle = mediaTitle
+        self.mediaDuration = mediaDuration
+        self.mediaSignature = mediaSignature
+        self.provider = provider
+        self.language = language
+        self.segments = segments
+    }
 }
 
 struct TranscriptSegment: Codable, Identifiable {

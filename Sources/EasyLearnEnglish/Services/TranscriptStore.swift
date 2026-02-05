@@ -15,7 +15,12 @@ struct TranscriptStore {
         let url = AppPaths.transcriptFile(fingerprint: fingerprint)
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
-        return try? decoder.decode(Transcript.self, from: data)
+        guard let transcript = try? decoder.decode(Transcript.self, from: data) else { return nil }
+        if transcript.mediaFingerprint != fingerprint {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        return transcript
     }
 
     func save(_ transcript: Transcript) {

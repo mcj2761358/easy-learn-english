@@ -6,7 +6,7 @@ struct SubtitleListView: View {
 
     var body: some View {
         Group {
-            if let transcript = appModel.transcript {
+            if let transcript = appModel.activeTranscript {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 12) {
@@ -63,9 +63,21 @@ private struct SubtitleSegmentRow: View {
                     }
                 }
             }
-            Text(timeRangeText)
-                .font(.caption2)
-                .foregroundColor(.secondary)
+            HStack(spacing: 8) {
+                Text(timeRangeText)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button {
+                    appModel.seek(to: segment.start)
+                } label: {
+                    Image(systemName: "arrow.right.circle")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("跳转到该时间")
+            }
         }
         .padding(8)
         .background(isActive ? Color.accentColor.opacity(0.15) : Color.clear)
@@ -73,7 +85,15 @@ private struct SubtitleSegmentRow: View {
     }
 
     private var timeRangeText: String {
-        String(format: "%.2f - %.2f", segment.start, segment.end)
+        "\(formatTimestamp(segment.start)) - \(formatTimestamp(segment.end))"
+    }
+
+    private func formatTimestamp(_ seconds: Double) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded()))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+        return String(format: "%02d:%02d:%02d", hours, minutes, secs)
     }
 }
 

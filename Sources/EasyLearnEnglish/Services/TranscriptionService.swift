@@ -28,7 +28,17 @@ enum TranscriptionError: Error, LocalizedError {
 
 protocol TranscriptionProvider {
     var name: String { get }
-    func transcribe(mediaURL: URL, language: String) async throws -> [TranscriptSegment]
+    func transcribe(
+        mediaURL: URL,
+        language: String,
+        progress: @Sendable @escaping (TranscriptionProgress) -> Void
+    ) async throws -> [TranscriptSegment]
+}
+
+extension TranscriptionProvider {
+    func transcribe(mediaURL: URL, language: String) async throws -> [TranscriptSegment] {
+        try await transcribe(mediaURL: mediaURL, language: language, progress: { _ in })
+    }
 }
 
 struct TranscriptionService {
@@ -57,7 +67,12 @@ struct ExternalProvider: TranscriptionProvider {
     let name: String
     let apiKey: String
 
-    func transcribe(mediaURL: URL, language: String) async throws -> [TranscriptSegment] {
+    func transcribe(
+        mediaURL: URL,
+        language: String,
+        progress: @Sendable @escaping (TranscriptionProgress) -> Void
+    ) async throws -> [TranscriptSegment] {
+        progress(.init(stage: .preparing, detail: "准备连接 \(name)"))
         throw TranscriptionError.failed("外部提供商 \(name) 尚未配置，请补充 API 集成。")
     }
 }

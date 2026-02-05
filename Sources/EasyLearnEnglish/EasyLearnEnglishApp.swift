@@ -30,7 +30,8 @@ struct EasyLearnEnglishApp: App {
                 }
         }
         Settings {
-            SettingsView(settings: settings)
+            SettingsDetailView(section: .provider, settings: settings)
+                .frame(minWidth: 420, minHeight: 520)
         }
     }
 }

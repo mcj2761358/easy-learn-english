@@ -21,6 +21,7 @@ final class AppViewModel: ObservableObject {
     }
     @Published var isTranscribing: Bool = false
     @Published var transcriptionError: TranscriptionErrorInfo?
+    @Published var transcriptionProgress: TranscriptionProgress?
     @Published var diagnosticsText: String?
     @Published var showDiagnostics: Bool = false
     @Published var currentSegmentIndex: Int = 0
@@ -37,9 +38,31 @@ final class AppViewModel: ObservableObject {
 
     private var selectionStart: TokenRef?
     private var selectionEnd: TokenRef?
+    private var currentTranscriptionID = UUID()
+    private var pendingErrorTask: Task<Void, Never>?
+    private var transcriptionTask: Task<Void, Never>?
+    private var retryTask: Task<Void, Never>?
+    private var lastAuthorizationDenied = false
+    private var transcriptOwnerID: UUID?
 
     let player = AVPlayer()
     private var timeObserverToken: Any?
+
+    var activeTranscript: Transcript? {
+        guard let media = selectedMedia else { return nil }
+        if let transcript,
+           transcriptOwnerID == media.id,
+           isTranscriptCompatible(transcript, media: media) {
+            return transcript
+        }
+        if let cached = transcriptStore.load(fingerprint: media.fingerprint),
+           isTranscriptCompatible(cached, media: media) {
+            transcript = cached
+            transcriptOwnerID = media.id
+            return cached
+        }
+        return nil
+    }
 
     init(mediaLibrary: MediaLibrary, vocabularyStore: VocabularyStore, settings: SettingsStore) {
         self.mediaLibrary = mediaLibrary
@@ -48,7 +71,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func selectToken(segmentIndex: Int, tokenIndex: Int, extend: Bool) {
-        guard let transcript else { return }
+        guard let transcript = activeTranscript else { return }
         guard transcript.segments.indices.contains(segmentIndex) else { return }
         let segment = transcript.segments[segmentIndex]
         guard segment.tokens.indices.contains(tokenIndex) else { return }
@@ -103,7 +126,7 @@ final class AppViewModel: ObservableObject {
     }
 
     private func updateSelectedTokens() {
-        guard let transcript, let start = selectionStart, let end = selectionEnd else {
+        guard let transcript = activeTranscript, let start = selectionStart, let end = selectionEnd else {
             selectedTokens = []
             translation = nil
             return
@@ -128,9 +151,13 @@ final class AppViewModel: ObservableObject {
 
     private func handleSelectionChange() {
         clearSelection()
+        cancelTranscriptionTasks()
         transcriptionError = nil
         transcript = nil
+        transcriptOwnerID = nil
+        currentSegmentIndex = 0
         isTranscribing = false
+        transcriptionProgress = nil
 
         guard let media = selectedMedia else { return }
         if !FileManager.default.fileExists(atPath: media.url.path) {
@@ -146,15 +173,16 @@ final class AppViewModel: ObservableObject {
         if let cached = transcriptStore.load(fingerprint: media.fingerprint) {
             if cached.segments.isEmpty {
                 transcriptStore.delete(fingerprint: media.fingerprint)
+            } else if !isTranscriptCompatible(cached, media: media) {
+                transcriptStore.delete(fingerprint: media.fingerprint)
             } else {
                 transcript = cached
+                transcriptOwnerID = media.id
                 return
             }
         }
 
-        Task {
-            await transcribe(media: media)
-        }
+        startTranscription(for: media)
     }
 
     private func preparePlayer(with url: URL) {
@@ -175,7 +203,7 @@ final class AppViewModel: ObservableObject {
     }
 
     private func updateCurrentSegment(currentTime: Double) {
-        guard let transcript else { return }
+        guard let transcript = activeTranscript else { return }
         guard !transcript.segments.isEmpty else { return }
         let idx = transcript.segments.firstIndex { currentTime >= $0.start && currentTime <= $0.end }
         if let idx {
@@ -183,24 +211,114 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private func transcribe(media: MediaItem) async {
+    private func startTranscription(for media: MediaItem) {
+        let runID = UUID()
+        currentTranscriptionID = runID
+        transcriptionTask?.cancel()
+        retryTask?.cancel()
+        transcriptionTask = Task { [weak self] in
+            await self?.transcribe(media: media, runID: runID, isRetry: false)
+        }
+    }
+
+    private func transcribe(media: MediaItem, runID: UUID, isRetry: Bool) async {
+        guard currentTranscriptionID == runID else { return }
+        if Task.isCancelled { return }
+
         isTranscribing = true
+        lastAuthorizationDenied = false
         transcriptionError = nil
         diagnosticsText = nil
+        pendingErrorTask?.cancel()
+        transcriptionProgress = TranscriptionProgress(stage: .preparing, detail: isRetry ? "准备重试转写" : nil)
+
+        let progressHandler: @Sendable (TranscriptionProgress) -> Void = { [weak self] progress in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.currentTranscriptionID == runID else { return }
+                self.transcriptionProgress = progress
+            }
+        }
+
         let provider = transcriptionService.provider(for: settings.provider, settings: settings)
         do {
-            let segments = try await provider.transcribe(mediaURL: media.url, language: "en-US")
+            let segments = try await provider.transcribe(
+                mediaURL: media.url,
+                language: "en-US",
+                progress: progressHandler
+            )
             guard !segments.isEmpty else {
                 throw TranscriptionError.failed("转写完成但没有识别到文本。请检查音频是否有人声，或更换转写提供商。")
             }
-            let transcript = Transcript(mediaFingerprint: media.fingerprint, provider: provider.name, language: "en-US", segments: segments)
+            if runID != currentTranscriptionID { return }
+            progressHandler(.init(stage: .parsingSegments, detail: "解析字幕结构"))
+            let transcript = Transcript(
+                mediaFingerprint: media.fingerprint,
+                mediaTitle: media.title,
+                mediaDuration: media.duration,
+                mediaSignature: MediaSignature.forFile(url: media.url),
+                provider: provider.name,
+                language: "en-US",
+                segments: segments
+            )
+            if !isTranscriptCompatible(transcript, media: media) {
+                throw TranscriptionError.failed("识别结果与媒体时长不匹配，将自动重试。")
+            }
+            progressHandler(.init(stage: .savingTranscript, detail: "保存字幕到本地"))
             transcriptStore.save(transcript)
             self.transcript = transcript
+            self.transcriptOwnerID = media.id
             self.transcriptionError = nil
             isTranscribing = false
+            transcriptionProgress = nil
         } catch {
-            transcriptionError = TranscriptionErrorMapper.describe(error)
+            if runID != currentTranscriptionID { return }
+            if let te = error as? TranscriptionError {
+                if case .authorizationDenied = te {
+                    lastAuthorizationDenied = true
+                }
+            }
+
+            if !isRetry, shouldAutoRetry(error) {
+                retryTask?.cancel()
+                retryTask = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    await self?.transcribe(media: media, runID: runID, isRetry: true)
+                }
+                return
+            }
+
             isTranscribing = false
+            transcriptionProgress = nil
+            let info = TranscriptionErrorMapper.describe(error)
+            scheduleError(info, runID: runID)
+        }
+    }
+
+    private func shouldAutoRetry(_ error: Error) -> Bool {
+        if let te = error as? TranscriptionError {
+            switch te {
+            case .noSpeechDetected, .speechNotAvailable:
+                return true
+            case .failed(let message):
+                return message.lowercased().contains("cannot open") == false
+            default:
+                return false
+            }
+        }
+        return false
+    }
+
+    private func scheduleError(_ info: TranscriptionErrorInfo, runID: UUID) {
+        pendingErrorTask?.cancel()
+        pendingErrorTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            await MainActor.run {
+                guard let self else { return }
+                guard self.currentTranscriptionID == runID else { return }
+                guard (self.transcript?.segments.isEmpty ?? true) else { return }
+                self.transcriptionError = info
+            }
         }
     }
 
@@ -208,11 +326,10 @@ final class AppViewModel: ObservableObject {
         guard let media = selectedMedia else { return }
         transcriptStore.delete(fingerprint: media.fingerprint)
         transcript = nil
+        transcriptOwnerID = nil
         transcriptionError = nil
         diagnosticsText = nil
-        Task {
-            await transcribe(media: media)
-        }
+        startTranscription(for: media)
     }
 
     func runDiagnostics() {
@@ -224,5 +341,50 @@ final class AppViewModel: ObservableObject {
                 showDiagnostics = true
             }
         }
+    }
+
+    func seek(to seconds: Double) {
+        let clamped = max(0, seconds)
+        let time = CMTime(seconds: clamped, preferredTimescale: 600)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func handleAppBecameActive() {
+        guard lastAuthorizationDenied else { return }
+        guard SpeechAuthorizationHelper.status() == .authorized else { return }
+        guard !isTranscribing, transcript == nil, let media = selectedMedia else { return }
+        lastAuthorizationDenied = false
+        startTranscription(for: media)
+    }
+
+    private func cancelTranscriptionTasks() {
+        currentTranscriptionID = UUID()
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+        retryTask?.cancel()
+        retryTask = nil
+        pendingErrorTask?.cancel()
+        pendingErrorTask = nil
+    }
+
+    private func isTranscriptCompatible(_ transcript: Transcript, media: MediaItem) -> Bool {
+        guard transcript.mediaFingerprint == media.fingerprint else { return false }
+        if let title = transcript.mediaTitle, title != media.title { return false }
+        if let duration = transcript.mediaDuration {
+            if abs(duration - media.duration) > 1.0 { return false }
+        }
+        guard let signature = transcript.mediaSignature else { return false }
+        if signature != MediaSignature.forFile(url: media.url) { return false }
+        guard media.duration > 0 else { return true }
+        guard !transcript.segments.isEmpty else { return false }
+        let minStart = transcript.segments.map { $0.start }.min() ?? 0
+        let maxEnd = transcript.segments.map { $0.end }.max() ?? 0
+        if maxEnd > media.duration + 1.5 { return false }
+        if media.duration >= 60 {
+            if minStart > min(8, media.duration * 0.1) { return false }
+            if maxEnd < media.duration - 8 { return false }
+            if (maxEnd - minStart) < media.duration * 0.5 { return false }
+        }
+        return true
     }
 }
