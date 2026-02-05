@@ -28,6 +28,10 @@ enum AppPaths {
         appSupport.appendingPathComponent("vocabulary.json")
     }
 
+    static var translationCacheFile: URL {
+        appSupport.appendingPathComponent("translation-cache.json")
+    }
+
     static func transcriptFile(fingerprint: String) -> URL {
         transcriptsDir.appendingPathComponent("\(fingerprint).json")
     }

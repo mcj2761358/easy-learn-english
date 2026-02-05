@@ -9,6 +9,12 @@ final class SettingsStore: ObservableObject {
     @AppStorage("glmApiKey") var glmApiKey: String = ""
     @AppStorage("kimiApiKey") var kimiApiKey: String = ""
     @AppStorage("minmaxApiKey") var minmaxApiKey: String = ""
+    @AppStorage("youdaoAppKey") var youdaoAppKey: String = ""
+    @AppStorage("youdaoAppSecret") var youdaoAppSecret: String = ""
+    @AppStorage("baiduAppId") var baiduAppId: String = ""
+    @AppStorage("baiduAppSecret") var baiduAppSecret: String = ""
+    @AppStorage("azureTranslatorKey") var azureTranslatorKey: String = ""
+    @AppStorage("azureTranslatorRegion") var azureTranslatorRegion: String = ""
 
     @Published var provider: TranscriptionProviderKind = .appleSpeech {
         didSet {

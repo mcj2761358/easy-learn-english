@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import SwiftUI
+import Combine
 
 struct TokenRef: Equatable {
     let segmentIndex: Int
@@ -26,7 +27,9 @@ final class AppViewModel: ObservableObject {
     @Published var showDiagnostics: Bool = false
     @Published var currentSegmentIndex: Int = 0
     @Published var selectedTokens: [String] = []
-    @Published var translation: TranslationResult?
+    @Published var translation: TranslationSnapshot?
+    @Published var translationKey: String?
+    @Published var isFetchingTranslation: Bool = false
 
     let mediaLibrary: MediaLibrary
     let vocabularyStore: VocabularyStore
@@ -42,8 +45,10 @@ final class AppViewModel: ObservableObject {
     private var pendingErrorTask: Task<Void, Never>?
     private var transcriptionTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
+    private var translationTask: Task<Void, Never>?
     private var lastAuthorizationDenied = false
     private var transcriptOwnerID: UUID?
+    private var cancellables: Set<AnyCancellable> = []
 
     let player = AVPlayer()
     private var timeObserverToken: Any?
@@ -68,6 +73,11 @@ final class AppViewModel: ObservableObject {
         self.mediaLibrary = mediaLibrary
         self.vocabularyStore = vocabularyStore
         self.settings = settings
+        vocabularyStore.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
     }
 
     func selectToken(segmentIndex: Int, tokenIndex: Int, extend: Bool) {
@@ -96,16 +106,20 @@ final class AppViewModel: ObservableObject {
     }
 
     func clearSelection() {
+        translationTask?.cancel()
         selectionStart = nil
         selectionEnd = nil
         selectedTokens = []
         translation = nil
+        translationKey = nil
+        isFetchingTranslation = false
     }
 
     func saveSelectionToVocabulary() {
         guard let selectedText = selectedText, !selectedText.isEmpty else { return }
-        let definition = translation?.definitionEn ?? ""
-        let zh = translation?.translationZh ?? ""
+        let snapshot = translation ?? translationService.cachedSnapshot(for: selectedText)
+        let definition = snapshot?.primaryEnglish ?? ""
+        let zh = snapshot?.primaryChinese ?? ""
         let sourceTitle = selectedMedia?.title ?? ""
         vocabularyStore.save(word: selectedText, definitionEn: definition, translationZh: zh, sourceTitle: sourceTitle)
     }
@@ -129,6 +143,7 @@ final class AppViewModel: ObservableObject {
         guard let transcript = activeTranscript, let start = selectionStart, let end = selectionEnd else {
             selectedTokens = []
             translation = nil
+            translationKey = nil
             return
         }
 
@@ -145,8 +160,69 @@ final class AppViewModel: ObservableObject {
         guard segment.tokens.indices.contains(low), segment.tokens.indices.contains(high) else { return }
         selectedTokens = Array(segment.tokens[low...high])
         if let text = selectedText {
-            translation = translationService.translate(wordOrPhrase: text)
+            fetchTranslation(for: text, forceRefresh: false)
         }
+    }
+
+    func fetchTranslation(for text: String, forceRefresh: Bool) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            translation = nil
+            translationKey = nil
+            return
+        }
+
+        let key = TranslationService.normalizedKey(trimmed)
+        translationTask?.cancel()
+
+        if !forceRefresh, let cached = translationService.cachedSnapshot(for: trimmed) {
+            translation = cached
+            translationKey = key
+            isFetchingTranslation = false
+            return
+        }
+
+        if !forceRefresh || translationKey != key {
+            translation = nil
+        }
+        translationKey = key
+        isFetchingTranslation = true
+        translationTask = Task { [weak self] in
+            guard let self else { return }
+            let snapshot = await translationService.fetch(
+                wordOrPhrase: trimmed,
+                forceRefresh: forceRefresh,
+                config: translationConfig()
+            )
+            if Task.isCancelled { return }
+            self.translation = snapshot
+            self.translationKey = key
+            self.isFetchingTranslation = false
+        }
+    }
+
+    func refreshTranslation(for text: String) {
+        fetchTranslation(for: text, forceRefresh: true)
+    }
+
+    func normalizedTranslationKey(for text: String?) -> String? {
+        guard let text else { return nil }
+        return TranslationService.normalizedKey(text)
+    }
+
+    func cachedTranslation(for text: String) -> TranslationSnapshot? {
+        translationService.cachedSnapshot(for: text)
+    }
+
+    private func translationConfig() -> TranslationServiceConfig {
+        TranslationServiceConfig(
+            youdaoAppKey: settings.youdaoAppKey,
+            youdaoAppSecret: settings.youdaoAppSecret,
+            baiduAppId: settings.baiduAppId,
+            baiduAppSecret: settings.baiduAppSecret,
+            azureTranslatorKey: settings.azureTranslatorKey,
+            azureTranslatorRegion: settings.azureTranslatorRegion
+        )
     }
 
     private func handleSelectionChange() {

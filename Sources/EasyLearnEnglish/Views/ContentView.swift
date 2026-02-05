@@ -3,6 +3,7 @@ import AppKit
 
 enum SidebarSelection: Hashable {
     case media(UUID)
+    case vocabulary
     case settings
 }
 
@@ -18,6 +19,7 @@ struct ContentView: View {
     @ObservedObject var appModel: AppViewModel
     @State private var selection: SidebarSelection?
     @State private var settingsSection: SettingsSection = .provider
+    @State private var vocabularySelection: UUID?
 
     var body: some View {
         NavigationSplitView {
@@ -27,6 +29,9 @@ struct ContentView: View {
             if case .settings = selection {
                 SettingsMenuView(selection: $settingsSection)
                     .frame(minWidth: 520)
+            } else if case .vocabulary = selection {
+                VocabularyLibraryView(appModel: appModel, selection: $vocabularySelection)
+                    .frame(minWidth: 520)
             } else {
                 PlayerAndSubtitlesView(appModel: appModel)
                     .frame(minWidth: 520)
@@ -34,6 +39,9 @@ struct ContentView: View {
         } detail: {
             if case .settings = selection {
                 SettingsDetailView(section: settingsSection, settings: appModel.settings)
+                    .frame(minWidth: 360)
+            } else if case .vocabulary = selection {
+                VocabularyDetailView(appModel: appModel, entryID: vocabularySelection)
                     .frame(minWidth: 360)
             } else {
                 TranslationAndVocabView(appModel: appModel)

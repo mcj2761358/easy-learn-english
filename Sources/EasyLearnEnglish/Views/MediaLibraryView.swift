@@ -11,19 +11,6 @@ struct MediaLibraryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "tray.full")
-                    .foregroundColor(.secondary)
-                Text("媒体库")
-                    .font(.headline)
-                Spacer()
-                Button("导入") {
-                    showImporter = true
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 8)
-
             if appModel.mediaLibrary.isImporting {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -47,6 +34,23 @@ struct MediaLibraryView: View {
             }
 
             List(selection: $selection) {
+                Section {
+                    HStack {
+                        Image(systemName: "book")
+                            .foregroundColor(.secondary)
+                        Text("生词本")
+                    }
+                    .tag(SidebarSelection.vocabulary)
+
+                    HStack {
+                        Image(systemName: "gearshape")
+                            .foregroundColor(.secondary)
+                        Text("设置")
+                    }
+                    .tag(SidebarSelection.settings)
+                } header: {
+                    Text("菜单")
+                }
                 Section {
                     if appModel.mediaLibrary.items.isEmpty {
                         Text("暂无媒体，点击“导入”添加。")
@@ -92,6 +96,16 @@ struct MediaLibraryView: View {
                             }
                         }
                     }
+                } header: {
+                    HStack {
+                        Image(systemName: "tray.full")
+                            .foregroundColor(.secondary)
+                        Text("媒体库")
+                        Spacer()
+                        Button("导入") {
+                            showImporter = true
+                        }
+                    }
                 }
             }
             .listStyle(.sidebar)
@@ -99,8 +113,13 @@ struct MediaLibraryView: View {
                 switch newValue {
                 case .media(let id):
                     appModel.selectedMedia = appModel.mediaLibrary.items.first { $0.id == id }
+                    appModel.clearSelection()
+                case .vocabulary:
+                    appModel.selectedMedia = nil
+                    appModel.clearSelection()
                 case .settings:
                     appModel.selectedMedia = nil
+                    appModel.clearSelection()
                 case .none:
                     appModel.selectedMedia = nil
                 }
@@ -110,7 +129,7 @@ struct MediaLibraryView: View {
                    appModel.mediaLibrary.items.contains(where: { $0.id == id }) {
                     return
                 }
-                if let first = appModel.mediaLibrary.items.first {
+                if selection == nil, let first = appModel.mediaLibrary.items.first {
                     selection = .media(first.id)
                     appModel.selectedMedia = first
                 }
@@ -122,25 +141,6 @@ struct MediaLibraryView: View {
                 }
             }
 
-            Spacer(minLength: 0)
-
-            Button {
-                selection = .settings
-                appModel.selectedMedia = nil
-            } label: {
-                HStack {
-                    Image(systemName: "gearshape")
-                    Text("设置")
-                    Spacer()
-                }
-                .padding(.vertical, 8)
-                .padding(.horizontal, 10)
-                .background(selection == .settings ? Color.accentColor.opacity(0.2) : Color.clear)
-                .cornerRadius(8)
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 8)
-            .padding(.bottom, 8)
         }
         .fileImporter(
             isPresented: $showImporter,

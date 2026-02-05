@@ -70,6 +70,18 @@ struct ProviderSettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+
+            SettingsCard(title: "翻译 API") {
+                labeledField("有道 AppKey", text: $settings.youdaoAppKey)
+                labeledField("有道 Secret", text: $settings.youdaoAppSecret)
+                labeledField("百度 AppID", text: $settings.baiduAppId)
+                labeledField("百度 Key", text: $settings.baiduAppSecret)
+                labeledField("微软 Key", text: $settings.azureTranslatorKey)
+                labeledField("微软 Region", text: $settings.azureTranslatorRegion)
+                Text("有道/百度/微软翻译需要在各平台申请 Key。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 
@@ -83,7 +95,7 @@ struct ProviderSettingsView: View {
 
     private func rowLabel(_ text: String) -> some View {
         Text(text)
-            .frame(width: 72, alignment: .leading)
+            .frame(width: 92, alignment: .leading)
     }
 
     private func buttonTitle(for status: SFSpeechRecognizerAuthorizationStatus) -> String {
@@ -202,6 +214,20 @@ struct StorageSettingsView: View {
                     path: AppPaths.transcriptsDir.path,
                     size: storage.transcriptBytes.byteCountString,
                     openAction: storage.openTranscriptsFolder
+                )
+
+                storageRow(
+                    title: "生词本",
+                    path: AppPaths.vocabularyFile.path,
+                    size: storage.vocabularyBytes.byteCountString,
+                    openAction: storage.openVocabularyFile
+                )
+
+                storageRow(
+                    title: "释义缓存",
+                    path: AppPaths.translationCacheFile.path,
+                    size: storage.translationCacheBytes.byteCountString,
+                    openAction: storage.openTranslationCacheFile
                 )
 
                 HStack {

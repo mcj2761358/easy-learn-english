@@ -65,24 +65,103 @@ struct TranscriptSegment: Codable, Identifiable {
 struct VocabularyEntry: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     let word: String
-    let definitionEn: String
-    let translationZh: String
+    var definitionEn: String
+    var translationZh: String
     let addedAt: Date
     let sourceTitle: String
+    var familiarity: VocabularyFamiliarity
 
-    init(id: UUID = UUID(), word: String, definitionEn: String, translationZh: String, addedAt: Date = Date(), sourceTitle: String) {
+    init(
+        id: UUID = UUID(),
+        word: String,
+        definitionEn: String,
+        translationZh: String,
+        addedAt: Date = Date(),
+        sourceTitle: String,
+        familiarity: VocabularyFamiliarity = .unfamiliar
+    ) {
         self.id = id
         self.word = word
         self.definitionEn = definitionEn
         self.translationZh = translationZh
         self.addedAt = addedAt
         self.sourceTitle = sourceTitle
+        self.familiarity = familiarity
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case word
+        case definitionEn
+        case translationZh
+        case addedAt
+        case sourceTitle
+        case familiarity
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        word = try container.decode(String.self, forKey: .word)
+        definitionEn = try container.decode(String.self, forKey: .definitionEn)
+        translationZh = try container.decode(String.self, forKey: .translationZh)
+        addedAt = try container.decode(Date.self, forKey: .addedAt)
+        sourceTitle = try container.decode(String.self, forKey: .sourceTitle)
+        familiarity = (try? container.decode(VocabularyFamiliarity.self, forKey: .familiarity)) ?? .unfamiliar
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(word, forKey: .word)
+        try container.encode(definitionEn, forKey: .definitionEn)
+        try container.encode(translationZh, forKey: .translationZh)
+        try container.encode(addedAt, forKey: .addedAt)
+        try container.encode(sourceTitle, forKey: .sourceTitle)
+        try container.encode(familiarity, forKey: .familiarity)
     }
 }
 
-struct TranslationResult {
-    let definitionEn: String
-    let translationZh: String
+enum VocabularyFamiliarity: String, CaseIterable, Identifiable, Codable {
+    case unfamiliar
+    case vague
+    case known
+    case familiar
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .unfamiliar: return "陌生"
+        case .vague: return "模糊"
+        case .known: return "认识"
+        case .familiar: return "熟悉"
+        }
+    }
+}
+
+struct DefinitionProviderResult: Identifiable, Codable, Hashable {
+    let id: String
+    let name: String
+    let text: String
+    let isError: Bool
+}
+
+struct TranslationSnapshot: Codable, Hashable {
+    let query: String
+    let fetchedAt: Date
+    let english: [DefinitionProviderResult]
+    let chinese: [DefinitionProviderResult]
+}
+
+extension TranslationSnapshot {
+    var primaryEnglish: String {
+        english.first { !$0.isError && !$0.text.isEmpty }?.text ?? ""
+    }
+
+    var primaryChinese: String {
+        chinese.first { !$0.isError && !$0.text.isEmpty }?.text ?? ""
+    }
 }
 
 enum TranscriptionProviderKind: String, CaseIterable, Identifiable, Codable {
