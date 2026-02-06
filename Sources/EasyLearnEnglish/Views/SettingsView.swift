@@ -155,10 +155,24 @@ struct StorageSettingsView: View {
                 )
 
                 storageRow(
+                    title: "导入暂存",
+                    path: AppPaths.importStagingDir.path,
+                    size: storage.importStagingBytes.byteCountString,
+                    openAction: storage.openImportStagingFolder
+                )
+
+                storageRow(
                     title: "字幕缓存",
                     path: AppPaths.transcriptsDir.path,
                     size: storage.transcriptBytes.byteCountString,
                     openAction: storage.openTranscriptsFolder
+                )
+
+                storageRow(
+                    title: "媒体库索引",
+                    path: AppPaths.libraryFile.path,
+                    size: storage.libraryBytes.byteCountString,
+                    openAction: storage.openLibraryFile
                 )
 
                 storageRow(
@@ -212,6 +226,7 @@ struct StorageSettingsView: View {
                     }
                 }
             }
+
         }
         .onAppear {
             storage.refresh()

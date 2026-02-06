@@ -5,8 +5,10 @@ struct StorageManagementView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        Form {
-            Section("存储") {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                GroupBox {
+                    VStack(spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("媒体缓存")
@@ -129,6 +131,39 @@ struct StorageManagementView: View {
                     Button("刷新") {
                         storage.refresh()
                     }
+                }
+                    }
+                } label: {
+                    Text("存储")
+                }
+
+                GroupBox {
+                    VStack(spacing: 12) {
+                        if storage.appSupportEntries.isEmpty {
+                            Text("暂无数据")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(storage.appSupportEntries) { entry in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(entry.name)
+                                        Text(entry.url.path)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(entry.bytes.byteCountString)
+                                        .font(.caption)
+                                    Button("打开") {
+                                        storage.openEntry(entry)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Text("应用数据")
                 }
             }
         }

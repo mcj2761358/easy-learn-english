@@ -753,7 +753,6 @@ final class AppViewModel: ObservableObject {
         if signature != MediaSignature.forFile(url: media.url) { return false }
         guard media.duration > 0 else { return true }
         guard !transcript.segments.isEmpty else { return false }
-        let minStart = transcript.segments.map { $0.start }.min() ?? 0
         let maxEnd = transcript.segments.map { $0.end }.max() ?? 0
         if maxEnd > media.duration + 1.5 { return false }
         return true

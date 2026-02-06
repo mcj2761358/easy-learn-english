@@ -3,6 +3,14 @@ import AppKit
 
 @MainActor
 final class StorageUsageModel: ObservableObject {
+    struct StorageEntry: Identifiable {
+        let id = UUID()
+        let name: String
+        let url: URL
+        let isDirectory: Bool
+        let bytes: Int64
+    }
+
     @Published var mediaBytes: Int64 = 0
     @Published var transcriptBytes: Int64 = 0
     @Published var importStagingBytes: Int64 = 0
@@ -10,6 +18,7 @@ final class StorageUsageModel: ObservableObject {
     @Published var vocabularyBytes: Int64 = 0
     @Published var translationCacheBytes: Int64 = 0
     @Published var cookiesBytes: Int64 = 0
+    @Published var appSupportEntries: [StorageEntry] = []
     @Published var lastUpdated: Date?
 
     func refresh() {
@@ -21,6 +30,7 @@ final class StorageUsageModel: ObservableObject {
             let vocabulary = FileSize.fileSize(AppPaths.vocabularyFile)
             let translationCache = FileSize.fileSize(AppPaths.translationCacheFile)
             let cookies = FileSize.fileSize(AppPaths.ytDlpCookiesFile)
+            let entries = Self.loadAppSupportEntries()
             await MainActor.run {
                 self.mediaBytes = media
                 self.transcriptBytes = transcripts
@@ -29,6 +39,7 @@ final class StorageUsageModel: ObservableObject {
                 self.vocabularyBytes = vocabulary
                 self.translationCacheBytes = translationCache
                 self.cookiesBytes = cookies
+                self.appSupportEntries = entries
                 self.lastUpdated = Date()
             }
         }
@@ -62,11 +73,51 @@ final class StorageUsageModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([AppPaths.ytDlpCookiesFile])
     }
 
+    func openEntry(_ entry: StorageEntry) {
+        if entry.isDirectory {
+            NSWorkspace.shared.open(entry.url)
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([entry.url])
+        }
+    }
+
+    func openAppSupportFolder() {
+        NSWorkspace.shared.open(AppPaths.appSupport)
+    }
+
     func clearCookiesFile() {
         if FileManager.default.fileExists(atPath: AppPaths.ytDlpCookiesFile.path) {
             try? FileManager.default.removeItem(at: AppPaths.ytDlpCookiesFile)
         }
         refresh()
+    }
+
+    nonisolated private static func loadAppSupportEntries() -> [StorageEntry] {
+        let base = AppPaths.appSupport
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(
+            at: base,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        let entries: [StorageEntry] = items.compactMap { url in
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+            let isDir = values?.isDirectory ?? false
+            let isFile = values?.isRegularFile ?? false
+            guard isDir || isFile else { return nil }
+            let size: Int64 = isDir ? FileSize.folderSize(url) : FileSize.fileSize(url)
+            return StorageEntry(
+                name: url.lastPathComponent,
+                url: url,
+                isDirectory: isDir,
+                bytes: size
+            )
+        }
+
+        return entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }
 
