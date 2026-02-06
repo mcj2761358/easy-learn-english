@@ -118,6 +118,28 @@ struct TranscriptSegment: Codable, Identifiable {
     }
 }
 
+struct ShadowingSegment: Identifiable, Codable, Equatable, Hashable {
+    let id: UUID
+    var title: String
+    var start: Double
+    var end: Double
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        title: String = "",
+        start: Double,
+        end: Double,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.title = title
+        self.start = start
+        self.end = end
+        self.createdAt = createdAt
+    }
+}
+
 struct VocabularyEntry: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     let word: String

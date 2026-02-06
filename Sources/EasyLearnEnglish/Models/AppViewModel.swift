@@ -33,6 +33,14 @@ final class AppViewModel: ObservableObject {
     @Published var showDiagnostics: Bool = false
     @Published var currentSegmentIndex: Int = 0
     @Published var onlineFallbackPrompt: OnlineFallbackPrompt?
+    @Published var manualLookupText: String = ""
+    @Published var shadowingSegments: [ShadowingSegment] = [] {
+        didSet {
+            saveShadowingSegmentsIfNeeded()
+        }
+    }
+    @Published var selectedShadowingSegmentID: UUID?
+    @Published var loopSegmentID: UUID?
     @Published var selectedTokens: [String] = []
     @Published var translation: TranslationSnapshot?
     @Published var translationKey: String?
@@ -43,6 +51,7 @@ final class AppViewModel: ObservableObject {
     let settings: SettingsStore
 
     private let transcriptStore = TranscriptStore()
+    private let shadowingStore = ShadowingStore()
     private let transcriptionService = TranscriptionService()
     private let translationService = TranslationService()
 
@@ -63,10 +72,13 @@ final class AppViewModel: ObservableObject {
     private var translationTask: Task<Void, Never>?
     private var lastAuthorizationDenied = false
     private var transcriptOwnerID: UUID?
+    private var shadowingFingerprint: String?
     private var cancellables: Set<AnyCancellable> = []
 
     let player = AVPlayer()
     private var timeObserverToken: Any?
+    private var loopStart: Double?
+    private var loopEnd: Double?
 
     var activeTranscript: Transcript? {
         guard let media = selectedMedia else { return nil }
@@ -154,6 +166,28 @@ final class AppViewModel: ObservableObject {
         return vocabularyStore.isSaved(word: selectedText)
     }
 
+    func isWordSaved(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return vocabularyStore.isSaved(word: trimmed)
+    }
+
+    func saveWord(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let snapshot = snapshotForLookup(text: trimmed)
+        let definition = snapshot?.primaryEnglish ?? ""
+        let zh = snapshot?.primaryChinese ?? ""
+        let sourceTitle = selectedMedia?.title ?? ""
+        vocabularyStore.save(word: trimmed, definitionEn: definition, translationZh: zh, sourceTitle: sourceTitle)
+    }
+
+    func removeWord(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        vocabularyStore.remove(word: trimmed)
+    }
+
     private func updateSelectedTokens() {
         guard let transcript = activeTranscript, let start = selectionStart, let end = selectionEnd else {
             selectedTokens = []
@@ -174,6 +208,10 @@ final class AppViewModel: ObservableObject {
         let high = max(start.tokenIndex, end.tokenIndex)
         guard segment.tokens.indices.contains(low), segment.tokens.indices.contains(high) else { return }
         selectedTokens = Array(segment.tokens[low...high])
+        let manual = manualLookupText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !manual.isEmpty {
+            manualLookupText = ""
+        }
         if let text = selectedText {
             fetchTranslation(for: text, forceRefresh: false)
         }
@@ -229,6 +267,14 @@ final class AppViewModel: ObservableObject {
         translationService.cachedSnapshot(for: text)
     }
 
+    private func snapshotForLookup(text: String) -> TranslationSnapshot? {
+        let key = TranslationService.normalizedKey(text)
+        if key == translationKey {
+            return translation
+        }
+        return translationService.cachedSnapshot(for: text)
+    }
+
     private func translationConfig() -> TranslationServiceConfig {
         TranslationServiceConfig(
             youdaoAppKey: settings.youdaoAppKey,
@@ -251,6 +297,7 @@ final class AppViewModel: ObservableObject {
         currentSegmentIndex = 0
         isTranscribing = false
         transcriptionProgress = nil
+        resetShadowingState()
 
         guard let media = selectedMedia else { return }
         if !FileManager.default.fileExists(atPath: media.url.path) {
@@ -271,6 +318,7 @@ final class AppViewModel: ObservableObject {
             } else {
                 transcript = cached
                 transcriptOwnerID = media.id
+                loadShadowingSegments(for: media)
                 return
             }
         }
@@ -278,10 +326,12 @@ final class AppViewModel: ObservableObject {
         if let session = transcriptionSessions[media.id] {
             applySession(session, for: media.id)
             if session.isTranscribing || session.progress != nil || session.error != nil {
+                loadShadowingSegments(for: media)
                 return
             }
         }
 
+        loadShadowingSegments(for: media)
         startTranscription(for: media)
     }
 
@@ -298,6 +348,7 @@ final class AppViewModel: ObservableObject {
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             Task { @MainActor in
                 self?.updateCurrentSegment(currentTime: time.seconds)
+                self?.handleLoop(currentTime: time.seconds)
             }
         }
     }
@@ -573,6 +624,108 @@ final class AppViewModel: ObservableObject {
         guard transcript == nil else { return }
         lastAuthorizationDenied = false
         startTranscription(for: media)
+    }
+
+    var currentPlaybackSeconds: Double {
+        max(0, player.currentTime().seconds)
+    }
+
+    func addShadowingSegment(start: Double, end: Double, title: String) {
+        guard let media = selectedMedia else { return }
+        let (clampedStart, clampedEnd) = clampSegment(start: start, end: end, duration: media.duration)
+        let segment = ShadowingSegment(title: title, start: clampedStart, end: clampedEnd)
+        shadowingSegments.append(segment)
+        selectedShadowingSegmentID = segment.id
+    }
+
+    func updateShadowingSegment(_ segment: ShadowingSegment) {
+        guard let media = selectedMedia else { return }
+        let (clampedStart, clampedEnd) = clampSegment(start: segment.start, end: segment.end, duration: media.duration)
+        if let index = shadowingSegments.firstIndex(where: { $0.id == segment.id }) {
+            shadowingSegments[index].title = segment.title
+            shadowingSegments[index].start = clampedStart
+            shadowingSegments[index].end = clampedEnd
+        }
+        if loopSegmentID == segment.id {
+            loopStart = clampedStart
+            loopEnd = clampedEnd
+        }
+    }
+
+    func deleteShadowingSegment(id: UUID) {
+        shadowingSegments.removeAll { $0.id == id }
+        if selectedShadowingSegmentID == id {
+            selectedShadowingSegmentID = shadowingSegments.first?.id
+        }
+        if loopSegmentID == id {
+            stopLoop()
+        }
+    }
+
+    func selectShadowingSegment(id: UUID?) {
+        selectedShadowingSegmentID = id
+    }
+
+    func playSegment(_ segment: ShadowingSegment) {
+        stopLoop()
+        seek(to: segment.start)
+        player.play()
+    }
+
+    func toggleLoop(for segment: ShadowingSegment) {
+        if loopSegmentID == segment.id {
+            stopLoop()
+        } else {
+            loopStart = segment.start
+            loopEnd = segment.end
+            loopSegmentID = segment.id
+            seek(to: segment.start)
+            player.play()
+        }
+    }
+
+    func stopLoop() {
+        loopStart = nil
+        loopEnd = nil
+        loopSegmentID = nil
+    }
+
+    private func handleLoop(currentTime: Double) {
+        guard let start = loopStart, let end = loopEnd else { return }
+        guard end > start else { return }
+        if currentTime >= end {
+            let time = CMTime(seconds: start, preferredTimescale: 600)
+            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+    }
+
+    private func clampSegment(start: Double, end: Double, duration: Double) -> (Double, Double) {
+        let lower = max(0, min(start, duration))
+        var upper = max(0, min(end, duration))
+        if upper <= lower {
+            upper = min(lower + 0.5, duration)
+        }
+        return (lower, upper)
+    }
+
+    private func loadShadowingSegments(for media: MediaItem) {
+        shadowingFingerprint = media.fingerprint
+        shadowingSegments = shadowingStore.load(fingerprint: media.fingerprint)
+        if selectedShadowingSegmentID == nil || !shadowingSegments.contains(where: { $0.id == selectedShadowingSegmentID }) {
+            selectedShadowingSegmentID = shadowingSegments.first?.id
+        }
+    }
+
+    private func resetShadowingState() {
+        shadowingFingerprint = nil
+        shadowingSegments = []
+        selectedShadowingSegmentID = nil
+        stopLoop()
+    }
+
+    private func saveShadowingSegmentsIfNeeded() {
+        guard let fingerprint = shadowingFingerprint else { return }
+        shadowingStore.save(fingerprint: fingerprint, segments: shadowingSegments)
     }
 
     func confirmOnlineFallback(for mediaID: UUID) {

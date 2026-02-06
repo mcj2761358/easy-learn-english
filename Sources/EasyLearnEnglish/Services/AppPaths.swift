@@ -14,6 +14,12 @@ enum AppPaths {
         return dir
     }
 
+    static var shadowingDir: URL {
+        let dir = appSupport.appendingPathComponent("shadowing", isDirectory: true)
+        ensureDirectory(dir)
+        return dir
+    }
+
     static var mediaDir: URL {
         let dir = appSupport.appendingPathComponent("media", isDirectory: true)
         ensureDirectory(dir)
@@ -50,6 +56,10 @@ enum AppPaths {
 
     static func transcriptFile(fingerprint: String) -> URL {
         transcriptsDir.appendingPathComponent("\(fingerprint).json")
+    }
+
+    static func shadowingFile(fingerprint: String) -> URL {
+        shadowingDir.appendingPathComponent("\(fingerprint).json")
     }
 
     static func mediaFile(fingerprint: String, ext: String) -> URL {

@@ -3,74 +3,97 @@ import AVKit
 
 struct PlayerAndSubtitlesView: View {
     @ObservedObject var appModel: AppViewModel
+    @State private var contentTab: PlayerContentTab = .subtitles
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                if appModel.selectedMedia != nil {
-                    VideoPlayer(player: appModel.player)
-                        .frame(minHeight: 240)
-                } else {
-                    Text("请选择媒体开始")
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VSplitView {
+            VStack(spacing: 0) {
+                ZStack {
+                    if appModel.selectedMedia != nil {
+                        VideoPlayer(player: appModel.player)
+                            .frame(minHeight: 200)
+                    } else {
+                        Text("请选择媒体开始")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
-            }
-            .background(Color.black.opacity(0.05))
+                .background(Color.black.opacity(0.05))
 
-            if appModel.isTranscribing || appModel.transcriptionProgress != nil {
-                TranscriptionProgressView(
-                    providerName: appModel.settings.provider.displayName,
-                    progress: appModel.transcriptionProgress
-                )
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
-            }
+                if appModel.isTranscribing || appModel.transcriptionProgress != nil {
+                    TranscriptionProgressView(
+                        providerName: appModel.settings.provider.displayName,
+                        progress: appModel.transcriptionProgress
+                    )
+                        .padding(.horizontal, 12)
+                        .padding(.top, 10)
+                }
 
-            if let error = appModel.transcriptionError,
-               (appModel.activeTranscript?.segments.isEmpty ?? true) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(error.title)
-                        .font(.headline)
-                        .foregroundColor(.red)
-                    Text(error.message)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                    if !error.actions.isEmpty {
-                        HStack(spacing: 8) {
-                            ForEach(error.actions) { action in
-                                Button(action.title) {
-                                    SettingsOpener.open(action)
+                if let error = appModel.transcriptionError,
+                   (appModel.activeTranscript?.segments.isEmpty ?? true) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(error.title)
+                            .font(.headline)
+                            .foregroundColor(.red)
+                        Text(error.message)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                        if !error.actions.isEmpty {
+                            HStack(spacing: 8) {
+                                ForEach(error.actions) { action in
+                                    Button(action.title) {
+                                        SettingsOpener.open(action)
+                                    }
                                 }
                             }
                         }
+                        Button("诊断") {
+                            appModel.runDiagnostics()
+                        }
                     }
-                    Button("诊断") {
-                        appModel.runDiagnostics()
-                    }
+                    .padding(8)
                 }
-                .padding(8)
-            }
 
-            if !appModel.isTranscribing, appModel.selectedMedia != nil, appModel.activeTranscript == nil {
-                HStack {
-                    Button("重新转写") {
-                        appModel.retranscribe()
+                if !appModel.isTranscribing, appModel.selectedMedia != nil, appModel.activeTranscript == nil {
+                    HStack {
+                        Button("重新转写") {
+                            appModel.retranscribe()
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.accentColor.opacity(0.15))
+                        .cornerRadius(6)
+                        Spacer()
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.accentColor.opacity(0.15))
-                    .cornerRadius(6)
-                    Spacer()
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
                 }
+            }
+            .frame(minHeight: 240)
+
+            VStack(spacing: 0) {
+                Picker("", selection: $contentTab) {
+                    ForEach(PlayerContentTab.allCases, id: \.self) { tab in
+                        Text(tab.title).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
                 .padding(.horizontal, 12)
-                .padding(.bottom, 6)
-            }
+                .padding(.vertical, 8)
 
-            Divider()
-            SubtitleListView(appModel: appModel)
-                .id(appModel.selectedMedia?.id)
+                Divider()
+                Group {
+                    switch contentTab {
+                    case .subtitles:
+                        SubtitleListView(appModel: appModel)
+                            .id(appModel.selectedMedia?.id)
+                    case .shadowing:
+                        ShadowingView(appModel: appModel)
+                            .id(appModel.selectedMedia?.id)
+                    }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .confirmationDialog(
             "是否改用联网识别？",
@@ -114,6 +137,20 @@ struct PlayerAndSubtitlesView: View {
             }
             .padding(16)
             .frame(width: 520, height: 320)
+        }
+    }
+}
+
+private enum PlayerContentTab: CaseIterable {
+    case subtitles
+    case shadowing
+
+    var title: String {
+        switch self {
+        case .subtitles:
+            return "字幕"
+        case .shadowing:
+            return "跟读"
         }
     }
 }
