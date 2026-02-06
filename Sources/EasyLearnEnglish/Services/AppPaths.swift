@@ -26,6 +26,12 @@ enum AppPaths {
         return dir
     }
 
+    static var importStagingDir: URL {
+        let dir = appSupport.appendingPathComponent("imports", isDirectory: true)
+        ensureDirectory(dir)
+        return dir
+    }
+
     static var libraryFile: URL {
         appSupport.appendingPathComponent("library.json")
     }

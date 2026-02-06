@@ -61,10 +61,12 @@ enum TranscriptionStage: Int, CaseIterable {
 struct TranscriptionProgress: Equatable {
     let stage: TranscriptionStage
     let detail: String?
+    let fraction: Double?
 
-    init(stage: TranscriptionStage, detail: String? = nil) {
+    init(stage: TranscriptionStage, detail: String? = nil, fraction: Double? = nil) {
         self.stage = stage
         self.detail = detail
+        self.fraction = fraction
     }
 
     var resolvedDetail: String {

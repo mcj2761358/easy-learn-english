@@ -24,6 +24,21 @@ struct StorageManagementView: View {
 
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
+                        Text("导入暂存")
+                        Text(AppPaths.importStagingDir.path)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Text(storage.importStagingBytes.byteCountString)
+                        .font(.caption)
+                    Button("打开") {
+                        storage.openImportStagingFolder()
+                    }
+                }
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text("字幕缓存")
                         Text(AppPaths.transcriptsDir.path)
                             .font(.caption2)
@@ -34,6 +49,51 @@ struct StorageManagementView: View {
                         .font(.caption)
                     Button("打开") {
                         storage.openTranscriptsFolder()
+                    }
+                }
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("媒体库索引")
+                        Text(AppPaths.libraryFile.path)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Text(storage.libraryBytes.byteCountString)
+                        .font(.caption)
+                    Button("打开") {
+                        storage.openLibraryFile()
+                    }
+                }
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("词汇表")
+                        Text(AppPaths.vocabularyFile.path)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Text(storage.vocabularyBytes.byteCountString)
+                        .font(.caption)
+                    Button("打开") {
+                        storage.openVocabularyFile()
+                    }
+                }
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("翻译缓存")
+                        Text(AppPaths.translationCacheFile.path)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Text(storage.translationCacheBytes.byteCountString)
+                        .font(.caption)
+                    Button("打开") {
+                        storage.openTranslationCacheFile()
                     }
                 }
 

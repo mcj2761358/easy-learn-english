@@ -18,7 +18,7 @@ struct PlayerAndSubtitlesView: View {
             }
             .background(Color.black.opacity(0.05))
 
-            if appModel.isTranscribing {
+            if appModel.isTranscribing || appModel.transcriptionProgress != nil {
                 TranscriptionProgressView(
                     providerName: appModel.settings.provider.displayName,
                     progress: appModel.transcriptionProgress
@@ -72,6 +72,30 @@ struct PlayerAndSubtitlesView: View {
                 .id(appModel.selectedMedia?.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .confirmationDialog(
+            "是否改用联网识别？",
+            isPresented: Binding(
+                get: { appModel.onlineFallbackPrompt != nil },
+                set: { if !$0 { appModel.cancelOnlineFallback() } }
+            )
+        ) {
+            if let prompt = appModel.onlineFallbackPrompt {
+                Button("改用联网识别") {
+                    appModel.confirmOnlineFallback(for: prompt.mediaID)
+                }
+                Button("取消", role: .cancel) {
+                    appModel.cancelOnlineFallback()
+                }
+            } else {
+                Button("关闭", role: .cancel) {}
+            }
+        } message: {
+            if let prompt = appModel.onlineFallbackPrompt {
+                Text("\(prompt.reason)\n联网识别可能产生费用。")
+            } else {
+                Text("联网识别可能产生费用。")
+            }
+        }
         .sheet(isPresented: $appModel.showDiagnostics) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("转写诊断")
@@ -102,6 +126,7 @@ private struct TranscriptionProgressView: View {
         let stage = progress?.stage ?? .preparing
         let title = stage.title
         let detail = progress?.resolvedDetail ?? stage.detail
+        let fraction = progress?.fraction
 
         HStack(spacing: 12) {
             ProgressView()
@@ -116,6 +141,11 @@ private struct TranscriptionProgressView: View {
                     StepChip(title: "提取音频", state: stepState(for: .extractingAudio, stage: stage))
                     StepChip(title: "识别中", state: stepState(for: .recognizingOnDevice, stage: stage))
                     StepChip(title: "解析字幕", state: stepState(for: .parsingSegments, stage: stage))
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    progressRow(title: "提取音频", value: stepProgress(for: .extractingAudio, stage: stage, fraction: fraction))
+                    progressRow(title: "识别中", value: stepProgress(for: .recognizingOnDevice, stage: stage, fraction: fraction))
+                    progressRow(title: "解析字幕", value: stepProgress(for: .parsingSegments, stage: stage, fraction: fraction))
                 }
                 Text("使用 \(providerName)")
                     .font(.caption2)
@@ -156,6 +186,62 @@ private struct TranscriptionProgressView: View {
             return .pending
         default:
             return .pending
+        }
+    }
+
+    private func stepProgress(for step: TranscriptionStage, stage: TranscriptionStage, fraction: Double?) -> Double? {
+        switch step {
+        case .extractingAudio:
+            if stage.rawValue < TranscriptionStage.extractingAudio.rawValue {
+                return 0
+            }
+            if stage == .extractingAudio {
+                guard let fraction else { return nil }
+                return min(max(fraction, 0), 1)
+            }
+            return 1
+        case .recognizingOnDevice:
+            if stage == .recognizingOnDevice || stage == .recognizingServer {
+                guard let fraction else { return nil }
+                return min(max(fraction, 0), 1)
+            }
+            if stage.rawValue > TranscriptionStage.recognizingServer.rawValue {
+                return 1
+            }
+            return 0
+        case .parsingSegments:
+            if stage == .parsingSegments {
+                guard let fraction else { return nil }
+                return min(max(fraction, 0), 1)
+            }
+            if stage.rawValue > TranscriptionStage.parsingSegments.rawValue {
+                return 1
+            }
+            return 0
+        default:
+            return 0
+        }
+    }
+
+    @ViewBuilder
+    private func progressRow(title: String, value: Double?) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.caption2)
+                .frame(width: 56, alignment: .leading)
+            if let value {
+                ProgressView(value: value)
+                Text(String(format: "%.0f%%", value * 100))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            } else {
+                ProgressView()
+                Text("--")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
         }
     }
 }

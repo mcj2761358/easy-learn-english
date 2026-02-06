@@ -5,6 +5,8 @@ import AppKit
 final class StorageUsageModel: ObservableObject {
     @Published var mediaBytes: Int64 = 0
     @Published var transcriptBytes: Int64 = 0
+    @Published var importStagingBytes: Int64 = 0
+    @Published var libraryBytes: Int64 = 0
     @Published var vocabularyBytes: Int64 = 0
     @Published var translationCacheBytes: Int64 = 0
     @Published var cookiesBytes: Int64 = 0
@@ -14,12 +16,16 @@ final class StorageUsageModel: ObservableObject {
         Task.detached {
             let media = FileSize.folderSize(AppPaths.mediaDir)
             let transcripts = FileSize.folderSize(AppPaths.transcriptsDir)
+            let importStaging = FileSize.folderSize(AppPaths.importStagingDir)
+            let library = FileSize.fileSize(AppPaths.libraryFile)
             let vocabulary = FileSize.fileSize(AppPaths.vocabularyFile)
             let translationCache = FileSize.fileSize(AppPaths.translationCacheFile)
             let cookies = FileSize.fileSize(AppPaths.ytDlpCookiesFile)
             await MainActor.run {
                 self.mediaBytes = media
                 self.transcriptBytes = transcripts
+                self.importStagingBytes = importStaging
+                self.libraryBytes = library
                 self.vocabularyBytes = vocabulary
                 self.translationCacheBytes = translationCache
                 self.cookiesBytes = cookies
@@ -34,6 +40,14 @@ final class StorageUsageModel: ObservableObject {
 
     func openTranscriptsFolder() {
         NSWorkspace.shared.open(AppPaths.transcriptsDir)
+    }
+
+    func openImportStagingFolder() {
+        NSWorkspace.shared.open(AppPaths.importStagingDir)
+    }
+
+    func openLibraryFile() {
+        NSWorkspace.shared.activateFileViewerSelecting([AppPaths.libraryFile])
     }
 
     func openVocabularyFile() {

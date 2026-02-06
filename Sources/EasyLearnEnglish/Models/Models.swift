@@ -7,14 +7,70 @@ struct MediaItem: Identifiable, Codable, Equatable, Hashable {
     var duration: Double
     let addedAt: Date
     let fingerprint: String
+    var parentFolderID: UUID?
 
-    init(id: UUID = UUID(), url: URL, title: String, duration: Double, addedAt: Date = Date(), fingerprint: String) {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case url
+        case title
+        case duration
+        case addedAt
+        case fingerprint
+        case parentFolderID
+    }
+
+    init(
+        id: UUID = UUID(),
+        url: URL,
+        title: String,
+        duration: Double,
+        addedAt: Date = Date(),
+        fingerprint: String,
+        parentFolderID: UUID? = nil
+    ) {
         self.id = id
         self.url = url
         self.title = title
         self.duration = duration
         self.addedAt = addedAt
         self.fingerprint = fingerprint
+        self.parentFolderID = parentFolderID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        url = try container.decode(URL.self, forKey: .url)
+        title = try container.decode(String.self, forKey: .title)
+        duration = try container.decode(Double.self, forKey: .duration)
+        addedAt = try container.decode(Date.self, forKey: .addedAt)
+        fingerprint = try container.decode(String.self, forKey: .fingerprint)
+        parentFolderID = try container.decodeIfPresent(UUID.self, forKey: .parentFolderID)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(url, forKey: .url)
+        try container.encode(title, forKey: .title)
+        try container.encode(duration, forKey: .duration)
+        try container.encode(addedAt, forKey: .addedAt)
+        try container.encode(fingerprint, forKey: .fingerprint)
+        try container.encode(parentFolderID, forKey: .parentFolderID)
+    }
+}
+
+struct MediaFolder: Identifiable, Codable, Equatable, Hashable {
+    let id: UUID
+    var name: String
+    var parentID: UUID?
+    let createdAt: Date
+
+    init(id: UUID = UUID(), name: String, parentID: UUID? = nil, createdAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.parentID = parentID
+        self.createdAt = createdAt
     }
 }
 

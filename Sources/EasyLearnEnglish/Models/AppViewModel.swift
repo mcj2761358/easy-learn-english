@@ -10,8 +10,14 @@ struct TokenRef: Equatable {
 
 @MainActor
 final class AppViewModel: ObservableObject {
+    struct OnlineFallbackPrompt: Identifiable, Equatable {
+        let id = UUID()
+        let mediaID: UUID
+        let reason: String
+    }
+
     @Published var selectedMedia: MediaItem? {
-        didSet { handleSelectionChange() }
+        didSet { handleSelectionChange(from: oldValue) }
     }
     @Published var transcript: Transcript? {
         didSet {
@@ -26,6 +32,7 @@ final class AppViewModel: ObservableObject {
     @Published var diagnosticsText: String?
     @Published var showDiagnostics: Bool = false
     @Published var currentSegmentIndex: Int = 0
+    @Published var onlineFallbackPrompt: OnlineFallbackPrompt?
     @Published var selectedTokens: [String] = []
     @Published var translation: TranslationSnapshot?
     @Published var translationKey: String?
@@ -41,10 +48,18 @@ final class AppViewModel: ObservableObject {
 
     private var selectionStart: TokenRef?
     private var selectionEnd: TokenRef?
-    private var currentTranscriptionID = UUID()
-    private var pendingErrorTask: Task<Void, Never>?
-    private var transcriptionTask: Task<Void, Never>?
-    private var retryTask: Task<Void, Never>?
+    private struct TranscriptionSession {
+        var runID: UUID
+        var task: Task<Void, Never>?
+        var retryTask: Task<Void, Never>?
+        var pendingErrorTask: Task<Void, Never>?
+        var isTranscribing: Bool
+        var progress: TranscriptionProgress?
+        var error: TranscriptionErrorInfo?
+        var allowOnlineFallback: Bool
+    }
+    private var transcriptionSessions: [UUID: TranscriptionSession] = [:]
+    private var onlineFallbackApproved: Set<UUID> = []
     private var translationTask: Task<Void, Never>?
     private var lastAuthorizationDenied = false
     private var transcriptOwnerID: UUID?
@@ -225,9 +240,11 @@ final class AppViewModel: ObservableObject {
         )
     }
 
-    private func handleSelectionChange() {
+    private func handleSelectionChange(from previous: MediaItem?) {
+        if let previous, let current = selectedMedia, previous.id == current.id {
+            return
+        }
         clearSelection()
-        cancelTranscriptionTasks()
         transcriptionError = nil
         transcript = nil
         transcriptOwnerID = nil
@@ -254,6 +271,13 @@ final class AppViewModel: ObservableObject {
             } else {
                 transcript = cached
                 transcriptOwnerID = media.id
+                return
+            }
+        }
+
+        if let session = transcriptionSessions[media.id] {
+            applySession(session, for: media.id)
+            if session.isTranscribing || session.progress != nil || session.error != nil {
                 return
             }
         }
@@ -288,35 +312,71 @@ final class AppViewModel: ObservableObject {
     }
 
     private func startTranscription(for media: MediaItem) {
+        let mediaID = media.id
+        if let session = transcriptionSessions[mediaID], session.isTranscribing {
+            applySession(session, for: mediaID)
+            return
+        }
         let runID = UUID()
-        currentTranscriptionID = runID
-        transcriptionTask?.cancel()
-        retryTask?.cancel()
-        transcriptionTask = Task { [weak self] in
+        let allowOnlineFallback = onlineFallbackApproved.contains(mediaID)
+        var session = transcriptionSessions[mediaID] ?? TranscriptionSession(
+            runID: runID,
+            task: nil,
+            retryTask: nil,
+            pendingErrorTask: nil,
+            isTranscribing: false,
+            progress: nil,
+            error: nil,
+            allowOnlineFallback: allowOnlineFallback
+        )
+        session.runID = runID
+        session.task?.cancel()
+        session.retryTask?.cancel()
+        session.pendingErrorTask?.cancel()
+        session.isTranscribing = true
+        session.error = nil
+        session.progress = TranscriptionProgress(stage: .preparing, detail: nil)
+        session.allowOnlineFallback = allowOnlineFallback
+        session.task = Task { [weak self] in
             await self?.transcribe(media: media, runID: runID, isRetry: false)
         }
+        transcriptionSessions[mediaID] = session
+        applySession(session, for: mediaID)
     }
 
     private func transcribe(media: MediaItem, runID: UUID, isRetry: Bool) async {
-        guard currentTranscriptionID == runID else { return }
+        let mediaID = media.id
+        guard isActiveSession(mediaID: mediaID, runID: runID) else { return }
         if Task.isCancelled { return }
 
-        isTranscribing = true
+        updateSession(mediaID: mediaID) { session in
+            session.isTranscribing = true
+            session.error = nil
+            session.progress = TranscriptionProgress(stage: .preparing, detail: isRetry ? "准备重试转写" : nil)
+        }
         lastAuthorizationDenied = false
-        transcriptionError = nil
         diagnosticsText = nil
-        pendingErrorTask?.cancel()
-        transcriptionProgress = TranscriptionProgress(stage: .preparing, detail: isRetry ? "准备重试转写" : nil)
+        updateSession(mediaID: mediaID) { session in
+            session.pendingErrorTask?.cancel()
+            session.pendingErrorTask = nil
+        }
 
         let progressHandler: @Sendable (TranscriptionProgress) -> Void = { [weak self] progress in
             Task { @MainActor in
                 guard let self else { return }
-                guard self.currentTranscriptionID == runID else { return }
-                self.transcriptionProgress = progress
+                guard self.isActiveSession(mediaID: mediaID, runID: runID) else { return }
+                self.updateSession(mediaID: mediaID) { session in
+                    session.progress = progress
+                }
             }
         }
 
-        let provider = transcriptionService.provider(for: settings.provider, settings: settings)
+        let allowOnlineFallback = transcriptionSessions[mediaID]?.allowOnlineFallback ?? false
+        let provider = transcriptionService.provider(
+            for: settings.provider,
+            settings: settings,
+            allowOnlineFallback: allowOnlineFallback
+        )
         do {
             let segments = try await provider.transcribe(
                 mediaURL: media.url,
@@ -326,8 +386,8 @@ final class AppViewModel: ObservableObject {
             guard !segments.isEmpty else {
                 throw TranscriptionError.failed("转写完成但没有识别到文本。请检查音频是否有人声，或更换转写提供商。")
             }
-            if runID != currentTranscriptionID { return }
-            progressHandler(.init(stage: .parsingSegments, detail: "解析字幕结构"))
+            if !isActiveSession(mediaID: mediaID, runID: runID) { return }
+            progressHandler(.init(stage: .parsingSegments, detail: "解析字幕结构", fraction: 1))
             let transcript = Transcript(
                 mediaFingerprint: media.fingerprint,
                 mediaTitle: media.title,
@@ -340,35 +400,108 @@ final class AppViewModel: ObservableObject {
             if !isTranscriptCompatible(transcript, media: media) {
                 throw TranscriptionError.failed("识别结果与媒体时长不匹配，将自动重试。")
             }
-            progressHandler(.init(stage: .savingTranscript, detail: "保存字幕到本地"))
+            progressHandler(.init(stage: .savingTranscript, detail: "保存字幕到本地", fraction: 1))
             transcriptStore.save(transcript)
-            self.transcript = transcript
-            self.transcriptOwnerID = media.id
-            self.transcriptionError = nil
-            isTranscribing = false
-            transcriptionProgress = nil
+            if selectedMedia?.id == mediaID {
+                self.transcript = transcript
+                self.transcriptOwnerID = media.id
+                self.transcriptionError = nil
+            }
+            updateSession(mediaID: mediaID) { session in
+                session.isTranscribing = false
+                session.progress = nil
+                session.error = nil
+                session.allowOnlineFallback = false
+                session.runID = UUID()
+            }
+            if selectedMedia?.id == mediaID {
+                isTranscribing = false
+                transcriptionProgress = nil
+            }
+            onlineFallbackApproved.remove(mediaID)
         } catch {
-            if runID != currentTranscriptionID { return }
+            if !isActiveSession(mediaID: mediaID, runID: runID) { return }
             if let te = error as? TranscriptionError {
-                if case .authorizationDenied = te {
+                switch te {
+                case .authorizationDenied:
                     lastAuthorizationDenied = true
+                case .onlineFallbackRequired(let reason):
+                    let info = TranscriptionErrorInfo(
+                        title: "本地识别未完成",
+                        message: "\(reason) 是否改用联网识别？（可能产生费用）",
+                        actions: []
+                    )
+                    updateSession(mediaID: mediaID) { session in
+                        session.isTranscribing = false
+                        session.error = info
+                        session.progress = session.progress ?? TranscriptionProgress(stage: .recognizingOnDevice, detail: "等待确认是否联网继续", fraction: 1)
+                        session.runID = UUID()
+                    }
+                    if let current = selectedMedia, current.id == mediaID {
+                        transcriptionError = info
+                        onlineFallbackPrompt = OnlineFallbackPrompt(mediaID: mediaID, reason: reason)
+                    }
+                    return
+                default:
+                    break
                 }
             }
 
             if !isRetry, shouldAutoRetry(error) {
-                retryTask?.cancel()
-                retryTask = Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    await self?.transcribe(media: media, runID: runID, isRetry: true)
+                updateSession(mediaID: mediaID) { session in
+                    session.retryTask?.cancel()
+                    session.retryTask = Task { [weak self] in
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        await self?.transcribe(media: media, runID: runID, isRetry: true)
+                    }
                 }
                 return
             }
 
-            isTranscribing = false
-            transcriptionProgress = nil
+            updateSession(mediaID: mediaID) { session in
+                session.isTranscribing = false
+                session.progress = nil
+                session.allowOnlineFallback = false
+                session.runID = UUID()
+            }
+            onlineFallbackApproved.remove(mediaID)
             let info = TranscriptionErrorMapper.describe(error)
-            scheduleError(info, runID: runID)
+            scheduleError(info, mediaID: mediaID, runID: runID)
         }
+    }
+
+    private func isActiveSession(mediaID: UUID, runID: UUID) -> Bool {
+        guard let session = transcriptionSessions[mediaID] else { return false }
+        return session.runID == runID
+    }
+
+    private func updateSession(mediaID: UUID, _ update: (inout TranscriptionSession) -> Void) {
+        guard var session = transcriptionSessions[mediaID] else { return }
+        update(&session)
+        transcriptionSessions[mediaID] = session
+        applySession(session, for: mediaID)
+    }
+
+    private func applySession(_ session: TranscriptionSession, for mediaID: UUID) {
+        guard selectedMedia?.id == mediaID else { return }
+        isTranscribing = session.isTranscribing
+        transcriptionProgress = session.progress
+        transcriptionError = session.error
+    }
+
+    private func cancelSession(for mediaID: UUID) {
+        guard var session = transcriptionSessions[mediaID] else { return }
+        session.task?.cancel()
+        session.retryTask?.cancel()
+        session.pendingErrorTask?.cancel()
+        session.task = nil
+        session.retryTask = nil
+        session.pendingErrorTask = nil
+        session.isTranscribing = false
+        session.progress = nil
+        session.error = nil
+        transcriptionSessions[mediaID] = session
+        applySession(session, for: mediaID)
     }
 
     private func shouldAutoRetry(_ error: Error) -> Bool {
@@ -385,21 +518,26 @@ final class AppViewModel: ObservableObject {
         return false
     }
 
-    private func scheduleError(_ info: TranscriptionErrorInfo, runID: UUID) {
-        pendingErrorTask?.cancel()
-        pendingErrorTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            await MainActor.run {
-                guard let self else { return }
-                guard self.currentTranscriptionID == runID else { return }
-                guard (self.transcript?.segments.isEmpty ?? true) else { return }
-                self.transcriptionError = info
+    private func scheduleError(_ info: TranscriptionErrorInfo, mediaID: UUID, runID: UUID) {
+        updateSession(mediaID: mediaID) { session in
+            session.pendingErrorTask?.cancel()
+            session.pendingErrorTask = nil
+            session.error = info
+            if session.runID == runID {
+                session.runID = UUID()
             }
+        }
+        if let current = selectedMedia, current.id == mediaID {
+            guard (transcript?.segments.isEmpty ?? true) else { return }
+            transcriptionError = info
         }
     }
 
     func retranscribe() {
         guard let media = selectedMedia else { return }
+        cancelSession(for: media.id)
+        onlineFallbackApproved.remove(media.id)
+        onlineFallbackPrompt = nil
         transcriptStore.delete(fingerprint: media.fingerprint)
         transcript = nil
         transcriptOwnerID = nil
@@ -428,24 +566,33 @@ final class AppViewModel: ObservableObject {
     func handleAppBecameActive() {
         guard lastAuthorizationDenied else { return }
         guard SpeechAuthorizationHelper.status() == .authorized else { return }
-        guard !isTranscribing, transcript == nil, let media = selectedMedia else { return }
+        guard let media = selectedMedia else { return }
+        if let session = transcriptionSessions[media.id], session.isTranscribing {
+            return
+        }
+        guard transcript == nil else { return }
         lastAuthorizationDenied = false
         startTranscription(for: media)
     }
 
-    private func cancelTranscriptionTasks() {
-        currentTranscriptionID = UUID()
-        transcriptionTask?.cancel()
-        transcriptionTask = nil
-        retryTask?.cancel()
-        retryTask = nil
-        pendingErrorTask?.cancel()
-        pendingErrorTask = nil
+    func confirmOnlineFallback(for mediaID: UUID) {
+        onlineFallbackApproved.insert(mediaID)
+        if let current = selectedMedia, current.id == mediaID {
+            transcriptionError = nil
+            onlineFallbackPrompt = nil
+            cancelSession(for: mediaID)
+            startTranscription(for: current)
+        } else {
+            onlineFallbackPrompt = nil
+        }
+    }
+
+    func cancelOnlineFallback() {
+        onlineFallbackPrompt = nil
     }
 
     private func isTranscriptCompatible(_ transcript: Transcript, media: MediaItem) -> Bool {
         guard transcript.mediaFingerprint == media.fingerprint else { return false }
-        if let title = transcript.mediaTitle, title != media.title { return false }
         if let duration = transcript.mediaDuration {
             if abs(duration - media.duration) > 1.0 { return false }
         }
@@ -456,11 +603,6 @@ final class AppViewModel: ObservableObject {
         let minStart = transcript.segments.map { $0.start }.min() ?? 0
         let maxEnd = transcript.segments.map { $0.end }.max() ?? 0
         if maxEnd > media.duration + 1.5 { return false }
-        if media.duration >= 60 {
-            if minStart > min(8, media.duration * 0.1) { return false }
-            if maxEnd < media.duration - 8 { return false }
-            if (maxEnd - minStart) < media.duration * 0.5 { return false }
-        }
         return true
     }
 }

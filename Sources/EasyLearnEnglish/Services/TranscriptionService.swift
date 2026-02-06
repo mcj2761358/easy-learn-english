@@ -6,6 +6,7 @@ enum TranscriptionError: Error, LocalizedError {
     case speechNotAvailable
     case noSpeechDetected
     case unsupported
+    case onlineFallbackRequired(String)
     case failed(String)
 
     var errorDescription: String? {
@@ -20,6 +21,8 @@ enum TranscriptionError: Error, LocalizedError {
             return "未检测到语音。请确认音频有人声，或切换为联网识别后重试。"
         case .unsupported:
             return "不支持的媒体格式或系统语音识别不可用。"
+        case .onlineFallbackRequired(let reason):
+            return reason
         case .failed(let message):
             return message
         }
@@ -42,13 +45,11 @@ extension TranscriptionProvider {
 }
 
 struct TranscriptionService {
-    private let appleProvider = AppleSpeechTranscriber()
-
     @MainActor
-    func provider(for kind: TranscriptionProviderKind, settings: SettingsStore) -> TranscriptionProvider {
+    func provider(for kind: TranscriptionProviderKind, settings: SettingsStore, allowOnlineFallback: Bool = true) -> TranscriptionProvider {
         switch kind {
         case .appleSpeech:
-            return appleProvider
+            return AppleSpeechTranscriber(allowOnlineFallback: allowOnlineFallback)
         case .openAI:
             return ExternalProvider(name: kind.displayName, apiKey: settings.openaiApiKey)
         case .gemini:
@@ -73,6 +74,10 @@ struct ExternalProvider: TranscriptionProvider {
         progress: @Sendable @escaping (TranscriptionProgress) -> Void
     ) async throws -> [TranscriptSegment] {
         progress(.init(stage: .preparing, detail: "准备连接 \(name)"))
-        throw TranscriptionError.failed("外部提供商 \(name) 尚未配置，请补充 API 集成。")
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedKey.isEmpty {
+            throw TranscriptionError.failed("未配置 \(name) API Key。请在设置中填写后重试。")
+        }
+        throw TranscriptionError.failed("\(name) 联网识别未接入或 API 不可用。请检查 API Key 或网络。")
     }
 }

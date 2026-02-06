@@ -30,6 +30,11 @@ private actor ContinuationTracker<T> {
 
 struct AppleSpeechTranscriber: TranscriptionProvider {
     let name: String = "Apple Speech (On-device)"
+    let allowOnlineFallback: Bool
+
+    init(allowOnlineFallback: Bool = true) {
+        self.allowOnlineFallback = allowOnlineFallback
+    }
 
     func transcribe(
         mediaURL: URL,
@@ -66,7 +71,12 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
             )
             if recognizer.supportsOnDeviceRecognition,
                isLikelyIncomplete(segments, audioDuration: audioDuration) {
-                progress(.init(stage: .recognizingServer, detail: "本地识别不完整，切换为联网识别"))
+                let reason = incompleteReason(segments: segments, audioDuration: audioDuration)
+                if !allowOnlineFallback {
+                    progress(.init(stage: .recognizingOnDevice, detail: "本地识别不完整，等待确认是否联网继续", fraction: 1))
+                    throw TranscriptionError.onlineFallbackRequired("本地识别结果不完整：\(reason) 建议改用联网识别继续。")
+                }
+                progress(.init(stage: .recognizingServer, detail: "本地识别不完整（\(reason)），切换为联网识别（进度将重新计算）", fraction: 0))
                 return try await recognize(
                     recognizer: recognizer,
                     audioURL: audioURL,
@@ -78,7 +88,11 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
             return segments
         } catch {
             if case TranscriptionError.noSpeechDetected = error, recognizer.supportsOnDeviceRecognition {
-                progress(.init(stage: .recognizingServer, detail: "本地识别无结果，切换为联网识别"))
+                if !allowOnlineFallback {
+                    progress(.init(stage: .recognizingOnDevice, detail: "本地识别无结果，等待确认是否联网继续", fraction: 1))
+                    throw TranscriptionError.onlineFallbackRequired("本地识别未检测到人声，可尝试联网识别。")
+                }
+                progress(.init(stage: .recognizingServer, detail: "本地识别无结果，切换为联网识别（进度将重新计算）", fraction: 0))
                 return try await recognize(
                     recognizer: recognizer,
                     audioURL: audioURL,
@@ -103,13 +117,17 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
         for mediaURL: URL,
         progress: @Sendable @escaping (TranscriptionProgress) -> Void
     ) async throws -> URL {
+        let mediaDuration = (try? await AVAsset(url: mediaURL).load(.duration).seconds) ?? 0
         let ext = mediaURL.pathExtension.lowercased()
         if ["m4a", "mp3", "wav", "aiff", "caf"].contains(ext) {
-            progress(.init(stage: .extractingAudio, detail: "音频文件已就绪"))
+            progress(.init(stage: .extractingAudio, detail: "音频文件已就绪", fraction: 1))
             return mediaURL
         }
-        progress(.init(stage: .extractingAudio, detail: "从视频中提取音频"))
-        return try await AudioExtractor.extractAudio(from: mediaURL)
+        progress(.init(stage: .extractingAudio, detail: "从视频中提取音频", fraction: 0))
+        return try await AudioExtractor.extractAudio(from: mediaURL) { fraction in
+            let detail = extractionDetail(fraction: fraction, total: mediaDuration)
+            progress(.init(stage: .extractingAudio, detail: detail, fraction: fraction))
+        }
     }
 
     private func recognize(
@@ -132,7 +150,7 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
         var lastProgressSecond: Int = -1
 
         let stage: TranscriptionStage = requiresOnDevice ? .recognizingOnDevice : .recognizingServer
-        progress(.init(stage: stage, detail: requiresOnDevice ? "使用本地模型识别" : "使用联网模型识别"))
+        progress(.init(stage: stage, detail: requiresOnDevice ? "使用本地模型识别" : "使用联网模型识别", fraction: 0))
 
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[TranscriptSegment], Error>) in
             let timeoutTask = Task {
@@ -173,12 +191,26 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
                     if currentSecond > lastProgressSecond {
                         lastProgressSecond = currentSecond
                         let detail = progressDetail(current: maxEnd, total: audioDuration)
-                        progress(.init(stage: stage, detail: detail))
+                        let fraction = progressFraction(current: maxEnd, total: audioDuration)
+                        progress(.init(stage: stage, detail: detail, fraction: fraction))
                     }
                 }
                 lock.unlock()
 
-                let currentSegments = TranscriptSegmentBuilder.build(from: mergedWordSegments)
+                let currentSegments: [TranscriptSegment]
+                if result.isFinal {
+                    progress(.init(stage: .parsingSegments, detail: parsingDetail(current: 0, total: mergedWordSegments.count), fraction: 0))
+                    currentSegments = TranscriptSegmentBuilder.build(from: mergedWordSegments) { fraction in
+                        let current = Int((Double(mergedWordSegments.count) * fraction).rounded(.up))
+                        let detail = parsingDetail(current: current, total: mergedWordSegments.count)
+                        progress(.init(stage: .parsingSegments, detail: detail, fraction: fraction))
+                    }
+                    if mergedWordSegments.isEmpty {
+                        progress(.init(stage: .parsingSegments, detail: parsingDetail(current: 0, total: 0), fraction: 1))
+                    }
+                } else {
+                    currentSegments = TranscriptSegmentBuilder.build(from: mergedWordSegments)
+                }
                 let currentText = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !currentSegments.isEmpty || !currentText.isEmpty {
                     lock.lock()
@@ -193,7 +225,6 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
                 
                 if result.isFinal {
                     timeoutTask.cancel()
-                    progress(.init(stage: .parsingSegments, detail: "解析识别结果"))
                     let segments = currentSegments
                     if !segments.isEmpty {
                         Task {
@@ -245,13 +276,30 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
     }
 
     private func isLikelyIncomplete(_ segments: [TranscriptSegment], audioDuration: Double) -> Bool {
-        guard audioDuration > 30, !segments.isEmpty else { return false }
+        return false
+    }
+
+    private func incompleteReason(segments: [TranscriptSegment], audioDuration: Double) -> String {
+        guard audioDuration > 0, !segments.isEmpty else {
+            return "识别结果为空"
+        }
         let minStart = segments.map { $0.start }.min() ?? 0
         let maxEnd = segments.map { $0.end }.max() ?? 0
-        if maxEnd < audioDuration - 8 { return true }
-        if minStart > min(8, audioDuration * 0.1) { return true }
-        if (maxEnd - minStart) < audioDuration * 0.5 { return true }
-        return false
+        let coverage = max(0, maxEnd - minStart)
+        let coverageRatio = audioDuration > 0 ? coverage / audioDuration : 0
+        let showHours = audioDuration >= 3600
+        if maxEnd < audioDuration - 8 {
+            return "识别只到 \(formatProgressTime(maxEnd, showHours: showHours)) / \(formatProgressTime(audioDuration, showHours: showHours))"
+        }
+        let minStartThreshold = min(8, audioDuration * 0.1)
+        if minStart > minStartThreshold {
+            return "识别从 \(formatProgressTime(minStart, showHours: showHours)) 才开始"
+        }
+        if coverageRatio < 0.5 {
+            let percent = Int((coverageRatio * 100).rounded())
+            return "识别覆盖率仅 \(percent)%"
+        }
+        return "识别覆盖率不足"
     }
 
     private func progressDetail(current: Double, total: Double) -> String {
@@ -262,6 +310,28 @@ struct AppleSpeechTranscriber: TranscriptionProvider {
             return "已识别 \(currentText) / \(totalText)"
         }
         return "已识别 \(currentText)"
+    }
+
+    private func progressFraction(current: Double, total: Double) -> Double? {
+        guard total > 0 else { return nil }
+        return min(max(current / total, 0), 1)
+    }
+
+    private func extractionDetail(fraction: Double, total: Double) -> String {
+        guard total > 0 else {
+            return String(format: "提取音频 %.0f%%", min(max(fraction, 0), 1) * 100)
+        }
+        let current = total * fraction
+        let showHours = total >= 3600
+        let currentText = formatProgressTime(current, showHours: showHours)
+        let totalText = formatProgressTime(total, showHours: showHours)
+        return "已提取 \(currentText) / \(totalText)"
+    }
+
+    private func parsingDetail(current: Int, total: Int) -> String {
+        guard total > 0 else { return "解析字幕" }
+        let clamped = min(max(current, 0), total)
+        return "解析字幕 \(clamped)/\(total)"
     }
 
     private func formatProgressTime(_ seconds: Double, showHours: Bool) -> String {
@@ -334,13 +404,15 @@ private struct WordKey: Hashable {
 }
 
 enum TranscriptSegmentBuilder {
-    static func build(from wordSegments: [SFTranscriptionSegment]) -> [TranscriptSegment] {
+    static func build(from wordSegments: [SFTranscriptionSegment], progress: ((Double) -> Void)? = nil) -> [TranscriptSegment] {
         guard !wordSegments.isEmpty else { return [] }
 
         var result: [TranscriptSegment] = []
         var currentWords: [String] = []
         var currentStart: Double = wordSegments[0].timestamp
         var currentEnd: Double = wordSegments[0].timestamp + wordSegments[0].duration
+        let total = wordSegments.count
+        let reportStride = max(1, total / 60)
 
         func flush() {
             guard !currentWords.isEmpty else { return }
@@ -350,7 +422,7 @@ enum TranscriptSegmentBuilder {
             currentWords = []
         }
 
-        for seg in wordSegments {
+        for (index, seg) in wordSegments.enumerated() {
             let word = seg.substring.trimmingCharacters(in: .whitespacesAndNewlines)
             if word.isEmpty {
                 continue
@@ -370,15 +442,21 @@ enum TranscriptSegmentBuilder {
 
             currentWords.append(word)
             currentEnd = segEnd
+
+            if let progress, index % reportStride == 0 || index == total - 1 {
+                let fraction = total > 0 ? Double(index + 1) / Double(total) : 1
+                progress(min(max(fraction, 0), 1))
+            }
         }
 
         flush()
+        progress?(1)
         return result
     }
 }
 
 enum AudioExtractor {
-    static func extractAudio(from mediaURL: URL) async throws -> URL {
+    static func extractAudio(from mediaURL: URL, progress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
         let asset = AVAsset(url: mediaURL)
         let duration = try await asset.load(.duration)
         let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
@@ -401,7 +479,20 @@ enum AudioExtractor {
             try? FileManager.default.removeItem(at: outputURL)
         }
 
+        let progressTask = Task {
+            while true {
+                let status = session.status
+                if status != .exporting && status != .waiting {
+                    break
+                }
+                progress?(Double(session.progress))
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+
         await session.export()
+        progressTask.cancel()
+        progress?(1)
         if session.status == .completed {
             return outputURL
         }

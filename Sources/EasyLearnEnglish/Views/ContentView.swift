@@ -3,6 +3,7 @@ import AppKit
 
 enum SidebarSelection: Hashable {
     case media(UUID)
+    case folder(UUID)
     case vocabulary
     case settings
     case onlineResources
@@ -21,12 +22,17 @@ struct ContentView: View {
     @State private var selection: SidebarSelection?
     @State private var settingsSection: SettingsSection = .provider
     @State private var vocabularySelection: UUID?
-    @StateObject private var onlineResourcesStore = OnlineResourcesStore()
+    @StateObject private var onlineResourcesStore: OnlineResourcesStore
     @StateObject private var onlineWebStore = WebViewStore()
+
+    init(appModel: AppViewModel) {
+        self.appModel = appModel
+        _onlineResourcesStore = StateObject(wrappedValue: OnlineResourcesStore(mediaLibrary: appModel.mediaLibrary))
+    }
 
     var body: some View {
         NavigationSplitView {
-            MediaLibraryView(appModel: appModel, selection: $selection)
+            MediaLibraryView(appModel: appModel, mediaLibrary: appModel.mediaLibrary, selection: $selection)
                 .frame(minWidth: 240)
         } content: {
             if case .settings = selection {

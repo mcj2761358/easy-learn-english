@@ -58,6 +58,12 @@ enum TranscriptionErrorMapper {
                     message: "请尝试更换音频格式，或先转换为常见格式再导入。",
                     actions: []
                 )
+            case .onlineFallbackRequired(let reason):
+                return TranscriptionErrorInfo(
+                    title: "需要确认联网识别",
+                    message: reason,
+                    actions: []
+                )
             case .failed(let message):
                 return TranscriptionErrorInfo(
                     title: "转写失败",
