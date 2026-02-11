@@ -36,6 +36,7 @@ struct TranslationAndVocabView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(activeText)
                                 .font(.headline)
+                                .textSelection(.enabled)
 
                             HStack(spacing: 8) {
                                 Button("刷新释义") {

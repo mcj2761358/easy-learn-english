@@ -16,6 +16,9 @@
 2. 选择 `EasyLearnEnglish` scheme 运行。
 3. 首次转写会提示语音识别权限。
 
+## 打包
+- 使用 Xcode 图形界面打包（不依赖脚本）：`docs/xcode-packaging.md`
+
 ## 说明
 - Apple Speech 默认尽量使用本地识别以降低成本。
 - 外部提供商（OpenAI/Gemini/GLM/Kimi/MinMax）为占位，需要补 API 集成：`Sources/EasyLearnEnglish/Services/TranscriptionService.swift`。

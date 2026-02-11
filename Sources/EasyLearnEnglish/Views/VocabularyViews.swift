@@ -68,6 +68,7 @@ struct VocabularyDetailView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(entry.word)
                                 .font(.title2)
+                                .textSelection(.enabled)
 
                             HStack(spacing: 12) {
                                 Text("熟悉度")

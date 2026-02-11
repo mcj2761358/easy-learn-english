@@ -20,6 +20,7 @@ struct ProviderResultsSection: View {
             if results.isEmpty {
                 Text(emptyText)
                     .foregroundColor(.secondary)
+                    .textSelection(.enabled)
             } else {
                 ForEach(results) { result in
                     VStack(alignment: .leading, spacing: 4) {
@@ -28,6 +29,7 @@ struct ProviderResultsSection: View {
                             .foregroundColor(.secondary)
                         Text(result.text)
                             .font(.body)
+                            .textSelection(.enabled)
                             .foregroundColor(result.isError ? .secondary : .primary)
                             .lineLimit(nil)
                             .fixedSize(horizontal: false, vertical: true)
